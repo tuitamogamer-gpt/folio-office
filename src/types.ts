@@ -1,5 +1,11 @@
 export type FileKind = 'document' | 'spreadsheet' | 'presentation';
-export interface OfficeFile { id: string; name: string; kind: FileKind; updatedAt: number; createdAt: number; starred: boolean; trashed: boolean; content: any; color?: string; pageSetup?: { landscape: boolean; margin: 'normal' | 'narrow' | 'wide' }; }
-export interface EditorProps { file: OfficeFile; onChange: (content: any) => void; onRename: (name: string) => void; onBack: () => void; onNotify: (message: string) => void; onPageSetupChange?: (setup: NonNullable<OfficeFile['pageSetup']>) => void; }
-export interface SlideData { id: string; title: string; body: string; subtitle?: string; background: string; layout: 'title' | 'content' | 'split'; }
-export interface SheetContent { cells: Record<string, string>; name: string; }
+export interface DocumentPageSetup { landscape: boolean; margin: 'normal' | 'narrow' | 'wide'; size?: 'a4' | 'letter' | 'legal'; header?: string; footer?: string; pageNumbers?: boolean; }
+export interface DocumentComment { id: string; text: string; quote: string; createdAt: number; resolved: boolean; }
+export interface FileVersion { id: string; name: string; createdAt: number; content: any; pageSetup?: DocumentPageSetup; comments?: DocumentComment[]; }
+export interface OfficeFile { id: string; name: string; kind: FileKind; updatedAt: number; createdAt: number; starred: boolean; trashed: boolean; content: any; color?: string; pageSetup?: DocumentPageSetup; comments?: DocumentComment[]; versions?: FileVersion[]; }
+export interface EditorProps { file: OfficeFile; onChange: (content: any) => void; onRename: (name: string) => void; onBack: () => void; onNotify: (message: string) => void; onPageSetupChange?: (setup: DocumentPageSetup) => void; onCommentsChange?: (comments: DocumentComment[]) => void; onOpenVersions?: () => void; saveState?: 'saving' | 'saved' | 'error'; }
+export interface SlideElement { id: string; type: 'text' | 'image' | 'shape'; x: number; y: number; width: number; height: number; text?: string; src?: string; shape?: 'rectangle' | 'ellipse' | 'line'; color?: string; fill?: string; fontSize?: number; bold?: boolean; align?: 'left' | 'center' | 'right'; rotation?: number; }
+export interface SlideData { id: string; title: string; body: string; subtitle?: string; background: string; layout: 'title' | 'content' | 'split' | 'blank'; notes?: string; hidden?: boolean; transition?: 'none' | 'fade' | 'slide'; titleSize?: number; bodySize?: number; textColor?: string; fontFamily?: string; elements?: SlideElement[]; }
+export interface CellStyle { bold?: boolean; italic?: boolean; underline?: boolean; color?: string; background?: string; align?: 'left' | 'center' | 'right'; numberFormat?: 'general' | 'number' | 'currency' | 'percentage' | 'date'; decimals?: number; }
+export interface SheetTab { id: string; name: string; cells: Record<string, string>; styles?: Record<string, CellStyle>; columnWidths?: Record<string, number>; freezeRows?: number; }
+export interface SheetContent { cells: Record<string, string>; name: string; sheets?: SheetTab[]; activeSheetId?: string; }

@@ -35,7 +35,7 @@ await page.getByRole('button',{name:'More options for Edited budget',exact:true}
 const dl = page.waitForEvent('download');await page.getByRole('button',{name:'Download .xlsx'}).click();
 const download=await dl;await download.saveAs('/tmp/folio-root-export.xlsx');
 console.log('Downloaded',download.suggestedFilename());
-await page.locator('input[type=file]').setInputFiles('/tmp/folio-root-export.xlsx');
+await page.locator('input[type=file][accept*=".docx"]').setInputFiles('/tmp/folio-root-export.xlsx');
 await expect(page.locator('.file-row')).toHaveCount(7);
 await page.locator('.nav-link').filter({hasText:'Templates'}).click();
 await expect(page.locator('.template-card')).toHaveCount(6);

@@ -1,0 +1,47 @@
+import { chromium, expect } from '@playwright/test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+const browser = await chromium.launch({headless:true,executablePath:'/usr/bin/chromium',args:['--no-sandbox']});
+const page = await browser.newPage({viewport:{width:1440,height:1000}});
+const errors=[];page.on('pageerror',e=>errors.push(e.message));
+const file={id:'sheet-integration',kind:'spreadsheet',name:'Spreadsheet integration',createdAt:Date.now(),updatedAt:Date.now(),starred:false,trashed:false,content:{name:'Sales',cells:{A1:'Name',B1:'Amount',C1:'Double',A2:'Zebra',B2:'30',C2:'=B2*2',A3:'Alpha',B3:'10',C3:'=B3*2',A4:'Beta',B4:'20',C4:'=B4*2'}}};
+await page.addInitScript(file=>{if(!sessionStorage.getItem('sheet-test-seeded')){localStorage.setItem('folio-files-v1',JSON.stringify([file]));sessionStorage.setItem('sheet-test-seeded','1');}},file);
+await page.goto('http://localhost:5173');await page.getByText(file.name,{exact:true}).click();
+const cell=key=>page.getByRole('textbox',{name:`Cell ${key}`,exact:true});
+const toolbar=title=>page.getByTitle(title,{exact:true});
+async function edit(key,value){await cell(key).dblclick();await cell(key).fill(value);await cell(key).press('Enter');}
+async function selectRange(from,to){await cell(from).click();await cell(to).click({modifiers:['Shift']});}
+async function content(){await expect.poll(()=>page.evaluate(()=>JSON.parse(localStorage.getItem('folio-files-v1'))[0]?.content?.sheets?.length||0)).toBeGreaterThan(0);return page.evaluate(()=>JSON.parse(localStorage.getItem('folio-files-v1'))[0].content);}
+await expect(cell('C2')).toHaveValue('60');
+await selectRange('B2','B4');await toolbar('Bold (Ctrl+B)').click();
+await expect(cell('B2')).toHaveCSS('font-weight','700');await expect(cell('B4')).toHaveCSS('font-weight','700');
+await page.getByLabel('Number format',{exact:true}).selectOption('currency');await expect(cell('B2')).toHaveValue('€30.00');
+await page.getByLabel('Fill color',{exact:true}).fill('#ffeeaa');await expect(cell('B3').locator('..')).toHaveCSS('background-color','rgb(255, 238, 170)');
+await edit('D2','=B2+$B$2');await selectRange('D2','D4');await toolbar('Fill down (Ctrl+D)').click();
+await expect(cell('D2')).toHaveValue('60');await expect(cell('D3')).toHaveValue('40');await expect(cell('D4')).toHaveValue('50');
+await cell('D3').click();await expect(page.getByLabel('Formula bar')).toHaveValue('=B3+$B$2');
+await page.context().grantPermissions(['clipboard-read','clipboard-write']);await selectRange('D2','D4');await page.keyboard.press('Control+c');await cell('F2').click();await page.keyboard.press('Control+v');await expect(cell('F2')).toHaveValue('90');await expect(cell('F3')).toHaveValue('70');await cell('F3').click();await expect(page.getByLabel('Formula bar')).toHaveValue('=D3+$B$2');await selectRange('F2','F4');await page.keyboard.press('Delete');
+await cell('B2').click();await page.getByRole('button',{name:'Data',exact:true}).click();await page.getByLabel('Filter selected column').fill('20');
+await expect(page.locator('.sheet-grid tbody tr')).toHaveCount(2);await expect(cell('B4')).toBeVisible();await toolbar('Clear filter').click();
+await toolbar('Sort column B ascending').click();await page.getByRole('button',{name:'Sort rows',exact:true}).click();
+await expect(cell('A1')).toHaveValue('Name');await expect(cell('A2')).toHaveValue('Alpha');await expect(cell('B2')).toHaveValue('€10.00');await expect(cell('C2')).toHaveValue('20');await expect(cell('B2')).toHaveCSS('font-weight','700');
+await toolbar('Find and replace (Ctrl+F)').click();await page.getByLabel('Find in sheet',{exact:true}).fill('Alpha');await page.getByRole('button',{name:'Next',exact:true}).click();await page.getByLabel('Replace with').fill('Almond');await page.getByRole('button',{name:'Replace all',exact:true}).click();await expect(cell('A2')).toHaveValue('Almond');await toolbar('Close find and replace').click();
+await page.getByRole('button',{name:'View',exact:true}).click();await page.getByRole('button',{name:'Freeze first row',exact:true}).click();await expect(page.locator('.sheet-frozen-row')).toHaveCount(1);
+const handle=page.getByRole('separator',{name:'Resize column A',exact:true});const box=await handle.boundingBox();await page.mouse.move(box.x+3,box.y+15);await page.mouse.down();await page.mouse.move(box.x+95,box.y+15);await page.mouse.up();
+await expect.poll(async()=>Number(await page.locator('.sheet-grid colgroup col').nth(1).evaluate(e=>parseFloat(e.style.width)))).toBeGreaterThan(200);
+await toolbar('Add sheet').click();await expect(page.getByRole('tab',{name:'Sheet 2',exact:true})).toHaveAttribute('aria-selected','true');
+await edit('A1',"='Sales'!B2");await expect(cell('A1')).toHaveValue('10');
+await page.getByRole('tab',{name:'Sales',exact:true}).click();await toolbar('Rename current sheet').click();await page.getByLabel('New sheet name').fill('Revenue');await page.getByRole('button',{name:'Rename',exact:true}).click();
+await page.getByRole('tab',{name:'Sheet 2',exact:true}).click();await expect(cell('A1')).toHaveValue('10');await cell('A1').click();await expect(page.getByLabel('Formula bar')).toHaveValue("='Revenue'!B2");
+await toolbar('Duplicate current sheet').click();await expect(page.getByRole('tab')).toHaveCount(3);await expect(cell('A1')).toHaveValue('10');
+await toolbar('Delete current sheet').click();await page.getByRole('button',{name:'Delete sheet',exact:true}).click();await expect(page.getByRole('tab')).toHaveCount(2);
+await toolbar('Undo (Ctrl+Z)').click();await expect(page.getByRole('tab')).toHaveCount(3);await toolbar('Redo (Ctrl+Shift+Z)').click();await expect(page.getByRole('tab')).toHaveCount(2);
+await page.getByRole('tab',{name:'Revenue',exact:true}).click();await page.getByRole('button',{name:'Home',exact:true}).click();
+await expect.poll(async()=>{const c=await content();return c.sheets.length===2&&c.sheets[0].name==='Revenue'&&c.sheets[1].cells.A1==="='Revenue'!B2"&&c.activeSheetId===c.sheets[0].id&&c.sheets[0].columnWidths?.A>200&&c.sheets[0].styles?.B2?.bold&&c.sheets[0].freezeRows===1;}).toBeTruthy();
+const saved=await content();assert.equal(saved.sheets[1].cells.A1,"='Revenue'!B2");assert.equal(saved.sheets[0].cells.D2,'=B2+$B$2');
+await page.screenshot({path:'/tmp/folio-sheet-upgrade-desktop.png',fullPage:true});
+await page.reload();await page.getByText(file.name,{exact:true}).click();await expect(cell('B2')).toHaveValue('€10.00');await expect(page.getByRole('tab')).toHaveCount(2);await expect(page.locator('.sheet-frozen-row')).toHaveCount(1);
+const downloadPromise=page.waitForEvent('download');await page.getByRole('button',{name:'Export',exact:true}).click();await page.getByRole('button',{name:'Excel workbook',exact:false}).click();const download=await downloadPromise;await download.saveAs('/tmp/spreadsheet-integration.xlsx');assert.ok((await fs.stat('/tmp/spreadsheet-integration.xlsx')).size>1000);
+await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/folio-sheet-upgrade-mobile.png',fullPage:true});assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
+console.log('PASS: legacy migration, range styling, fill references, filter, formula sort, replace, freeze, resize, multi-sheet CRUD, rename references, workbook undo/redo, persistence, XLSX download, mobile layout; no browser errors.');
+await browser.close();

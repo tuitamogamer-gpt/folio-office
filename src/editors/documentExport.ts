@@ -1,14 +1,28 @@
 import DOMPurify from 'dompurify';
 import {
-  AlignmentType, BorderStyle, Document, ExternalHyperlink, HeadingLevel,
-  ImageRun, LevelFormat, Packer, PageOrientation, Paragraph, ShadingType, Table, TableCell,
-  TableRow, TextRun, UnderlineType, WidthType,
+  AlignmentType, BorderStyle, commentIdToParaId, CommentRangeEnd, CommentRangeStart, CommentReference,
+  Document, ExternalHyperlink, Footer, Header, HeadingLevel,
+  ImageRun, LevelFormat, Packer, PageBreak, PageNumber, PageOrientation, Paragraph, ShadingType, Table, TableCell,
+  TableRow, TextRun, UnderlineType, VerticalMergeType, WidthType,
   type IParagraphOptions, type IRunOptions, type INumberingOptions,
   type ParagraphChild,
 } from 'docx';
+import type { DocumentComment, DocumentPageSetup } from '../types';
 
 type Block = Paragraph | Table;
 type ListContext = { reference: string; level: number };
+type ExportOptions = Partial<DocumentPageSetup> & { comments?: DocumentComment[] };
+type InlineContext = {
+  maxImageWidth: number;
+  commentStarts: Map<HTMLElement, number>;
+  commentEnds: Map<HTMLElement, number>;
+  anchoredComments: Set<number>;
+};
+const PAPER_SIZES = {
+  a4: { width: 11906, height: 16838, css: 'A4' },
+  letter: { width: 12240, height: 15840, css: 'letter' },
+  legal: { width: 12240, height: 20160, css: 'legal' },
+};
 
 function download(blob: Blob, name: string) {
   const url = URL.createObjectURL(blob);
@@ -60,7 +74,7 @@ function runStyle(element: HTMLElement, inherited: IRunOptions): IRunOptions {
   return result;
 }
 
-async function imageRun(element: HTMLImageElement): Promise<ParagraphChild[]> {
+async function imageRun(element: HTMLImageElement, maxWidth: number): Promise<ParagraphChild[]> {
   const source = element.getAttribute('src') || '';
   if (!/^data:image\//i.test(source)) return [new TextRun(element.alt ? `[Image: ${element.alt}]` : '[Image]')];
   try {
@@ -85,9 +99,11 @@ async function imageRun(element: HTMLImageElement): Promise<ParagraphChild[]> {
       bytes = Uint8Array.from(atob(canvas.toDataURL('image/png').split(',')[1]), c => c.charCodeAt(0));
       type = 'png';
     }
-    const originalWidth = Number(element.getAttribute('width')) || image.naturalWidth || 480;
-    const originalHeight = Number(element.getAttribute('height')) || image.naturalHeight || 320;
-    const scale = Math.min(1, 600 / originalWidth);
+    const requestedWidth = Number(element.getAttribute('width')) || cssLengthTwips(element.style.width) / 15;
+    const originalWidth = requestedWidth > 0 ? requestedWidth : image.naturalWidth || 480;
+    const requestedHeight = Number(element.getAttribute('height')) || cssLengthTwips(element.style.height) / 15;
+    const originalHeight = requestedHeight > 0 ? requestedHeight : originalWidth * (image.naturalHeight || 320) / (image.naturalWidth || 480);
+    const scale = Math.min(1, maxWidth / originalWidth);
     return [new ImageRun({
       data: bytes,
       type,
@@ -99,7 +115,7 @@ async function imageRun(element: HTMLImageElement): Promise<ParagraphChild[]> {
   }
 }
 
-async function inline(nodes: Iterable<Node>, inherited: IRunOptions = {}): Promise<ParagraphChild[]> {
+async function inline(nodes: Iterable<Node>, inherited: IRunOptions, context: InlineContext): Promise<ParagraphChild[]> {
   const runs: ParagraphChild[] = [];
   for (const node of nodes) {
     if (node.nodeType === Node.TEXT_NODE) {
@@ -107,18 +123,33 @@ async function inline(nodes: Iterable<Node>, inherited: IRunOptions = {}): Promi
       continue;
     }
     if (!(node instanceof HTMLElement)) continue;
+    const commentStart = context.commentStarts.get(node);
+    if (commentStart !== undefined) {
+      runs.push(new CommentRangeStart(commentStart));
+      context.anchoredComments.add(commentStart);
+    }
     const tag = node.tagName.toLowerCase();
     if (tag === 'br') runs.push(new TextRun({ break: 1 }));
-    else if (tag === 'img') runs.push(...await imageRun(node as HTMLImageElement));
+    else if (tag === 'img') runs.push(...await imageRun(node as HTMLImageElement, context.maxImageWidth));
     else {
-      const children = await inline(node.childNodes, runStyle(node, inherited));
+      const children = await inline(node.childNodes, runStyle(node, inherited), context);
       const href = node.getAttribute('href');
       if (tag === 'a' && href && /^(https?:|mailto:)/i.test(href)) {
         runs.push(new ExternalHyperlink({ link: href, children }));
       } else runs.push(...children);
     }
+    const commentEnd = context.commentEnds.get(node);
+    if (commentEnd !== undefined) runs.push(new CommentRangeEnd(commentEnd), new TextRun({ children: [new CommentReference(commentEnd)] }));
   }
   return runs;
+}
+
+function cssLengthTwips(value: string): number {
+  const match = value.trim().match(/^([\d.]+)(px|pt|in|cm|mm)?$/i);
+  if (!match) return 0;
+  const units: Record<string, number> = { px: 15, pt: 20, in: 1440, cm: 1440 / 2.54, mm: 1440 / 25.4 };
+  const length = Number(match[1]) * units[match[2]?.toLowerCase() || 'px'];
+  return Number.isFinite(length) && length > 0 ? Math.round(length) : 0;
 }
 
 function paragraphLineSpacing(element: HTMLElement): number {
@@ -135,15 +166,24 @@ function paragraphLineSpacing(element: HTMLElement): number {
 }
 
 function paragraphOptions(element: HTMLElement): IParagraphOptions {
+  const image = element.tagName === 'IMG' ? element : !element.textContent?.trim() ? element.querySelector('img') : null;
+  const alignmentValue = element.style.textAlign || image?.getAttribute('data-align') || '';
   const alignment = {
     left: AlignmentType.LEFT, center: AlignmentType.CENTER,
     right: AlignmentType.RIGHT, justify: AlignmentType.JUSTIFIED,
-  }[element.style.textAlign];
+  }[alignmentValue];
   const heading = {
     h1: HeadingLevel.HEADING_1, h2: HeadingLevel.HEADING_2, h3: HeadingLevel.HEADING_3,
     h4: HeadingLevel.HEADING_4, h5: HeadingLevel.HEADING_5, h6: HeadingLevel.HEADING_6,
   }[element.tagName.toLowerCase()];
-  return { alignment, heading, spacing: { after: 160, line: paragraphLineSpacing(element) } };
+  const level = Number(element.getAttribute('data-indent'));
+  const indent = element.hasAttribute('data-indent') && Number.isFinite(level)
+    ? Math.max(0, Math.min(8, level)) * 720 : cssLengthTwips(element.style.marginLeft);
+  return {
+    alignment, heading, indent: indent ? { left: indent } : undefined,
+    pageBreakBefore: ['page', 'always'].includes(element.style.breakBefore || element.style.pageBreakBefore) || undefined,
+    spacing: { after: 160, line: paragraphLineSpacing(element) },
+  };
 }
 
 function plainText(root: HTMLElement): string {
@@ -166,38 +206,67 @@ function plainText(root: HTMLElement): string {
   return walk(root).replace(/\t\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-export async function exportDocument(html: string, name: string, format: 'docx' | 'html' | 'txt', options: { landscape?: boolean; margin?: 'normal' | 'narrow' | 'wide' } = {}): Promise<void> {
+export async function exportDocument(html: string, name: string, format: 'docx' | 'html' | 'txt', options: ExportOptions = {}): Promise<void> {
   const safeHtml = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
   const root = document.createElement('div');
   root.innerHTML = safeHtml;
+  const paper = PAPER_SIZES[options.size || 'a4'] || PAPER_SIZES.a4;
+  const margin = { normal: 1440, narrow: 720, wide: 2160 }[options.margin || 'normal'] || 1440;
+  const comments = Array.from(new Map((options.comments || []).map(comment => [comment.id, comment])).values());
   const filename = (name.trim() || 'Untitled document').replace(/[\\/:*?"<>|]/g, '-').replace(/\.(docx|html?|txt)$/i, '');
   if (format === 'txt') {
     download(new Blob([plainText(root)], { type: 'text/plain;charset=utf-8' }), `${filename}.txt`);
     return;
   }
   if (format === 'html') {
-    const title = document.createElement('span');
-    title.textContent = name || 'Untitled document';
-    download(new Blob([`<!doctype html><html><head><meta charset="utf-8"><title>${title.innerHTML}</title><style>body{font:11pt Arial,sans-serif;max-width:760px;margin:48px auto;line-height:1.65;padding:0 24px}h1{font:normal 30pt Georgia,serif;color:#243c2d}h2{font:normal 21pt Georgia,serif;color:#34573d}h3{font:normal 14pt Arial,sans-serif;color:#456b4a}table{border-collapse:collapse;width:100%}td,th{border:1px solid #cbd5e1;padding:8px}img{max-width:100%;height:auto}blockquote{border-left:3px solid #94a3b8;margin-left:0;padding-left:20px}</style></head><body>${safeHtml}</body></html>`], { type: 'text/html;charset=utf-8' }), `${filename}.html`);
+    const escape = (text: string) => {
+      const span = document.createElement('span');
+      span.textContent = text;
+      return span.innerHTML;
+    };
+    const cssText = (text: string) => `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]/g, ' ').replace(/</g, '\\3c ').replace(/>/g, '\\3e ')}"`;
+    const pageWidth = ((options.landscape ? paper.height : paper.width) - margin * 2) / 15;
+    const footerText = options.footer || '';
+    const pageFooter = `${cssText(footerText + (footerText && options.pageNumbers ? ' · ' : ''))}${options.pageNumbers ? ' "Page " counter(page)' : ''}`;
+    const notes = comments.length ? `<aside class="document-comments"><h2>Comments</h2><ol>${comments.map(comment => `<li${comment.resolved ? ' data-resolved="true"' : ''}><p>${escape(comment.text)}${comment.resolved ? ' (Resolved)' : ''}</p>${comment.quote ? `<blockquote>${escape(comment.quote)}</blockquote>` : ''}</li>`).join('')}</ol></aside>` : '';
+    download(new Blob([`<!doctype html><html><head><meta charset="utf-8"><title>${escape(name || 'Untitled document')}</title><style>@page{size:${paper.css} ${options.landscape ? 'landscape' : 'portrait'};margin:${margin / 1440}in;@top-center{content:${cssText(options.header || '')};font:9pt Arial,sans-serif;color:#64748b}@bottom-center{content:${pageFooter};font:9pt Arial,sans-serif;color:#64748b}}body{font:11pt Arial,sans-serif;max-width:${pageWidth}px;margin:48px auto;line-height:1.65;padding:0 24px}h1{font:normal 30pt Georgia,serif;color:#243c2d}h2{font:normal 21pt Georgia,serif;color:#34573d}h3{font:normal 14pt Arial,sans-serif;color:#456b4a}table{border-collapse:collapse;width:100%}td,th{border:1px solid #cbd5e1;padding:8px}img{max-width:100%;height:auto}blockquote{border-left:3px solid #94a3b8;margin-left:0;padding-left:20px}[data-page-break]{break-after:page;page-break-after:always}.page-header,.page-footer{white-space:pre-line;text-align:center;color:#64748b;font-size:9pt;margin:24px 0}.document-comments{border-top:1px solid #cbd5e1;margin-top:36px}[data-comment-id]{background:#fef3c7}@media print{body{max-width:none;margin:0;padding:0}.page-header,.page-footer{display:none}}</style></head><body>${options.header ? `<header class="page-header">${escape(options.header)}</header>` : ''}<main>${safeHtml}</main>${footerText ? `<footer class="page-footer">${escape(footerText)}</footer>` : ''}${notes}</body></html>`], { type: 'text/html;charset=utf-8' }), `${filename}.html`);
     return;
   }
 
   const numbering: INumberingOptions['config'][number][] = [];
+  const context: InlineContext = {
+    maxImageWidth: ((options.landscape ? paper.height : paper.width) - margin * 2) / 15,
+    commentStarts: new Map(), commentEnds: new Map(), anchoredComments: new Set(),
+  };
+  const commentIds = new Map(comments.map((comment, index) => [comment.id, index]));
+  const commentNodes = new Map<number, HTMLElement[]>();
+  for (const element of root.querySelectorAll<HTMLElement>('[data-comment-id]')) {
+    const id = commentIds.get(element.getAttribute('data-comment-id') || '');
+    if (id !== undefined) commentNodes.set(id, [...(commentNodes.get(id) || []), element]);
+  }
+  for (const [id, nodes] of commentNodes) {
+    context.commentStarts.set(nodes[0], id);
+    context.commentEnds.set(nodes[nodes.length - 1], id);
+  }
   async function blocks(container: HTMLElement, depth = 0): Promise<Block[]> {
     const result: Block[] = [];
     let loose: Node[] = [];
     async function flush() {
       if (loose.some(n => n.nodeType !== Node.TEXT_NODE || n.textContent?.trim())) {
-        result.push(new Paragraph({ children: await inline(loose), spacing: { after: 160 } }));
+        result.push(new Paragraph({ children: await inline(loose, {}, context), spacing: { after: 160 } }));
       }
       loose = [];
     }
     for (const node of Array.from(container.childNodes)) {
       if (!(node instanceof HTMLElement)) { loose.push(node); continue; }
       const tag = node.tagName.toLowerCase();
-      if (!/^(p|h[1-6]|div|blockquote|pre|ul|ol|table|hr)$/.test(tag)) { loose.push(node); continue; }
+      if (!/^(p|h[1-6]|div|blockquote|pre|ul|ol|table|hr|img)$/.test(tag)) { loose.push(node); continue; }
       await flush();
-      if (tag === 'ul' || tag === 'ol') {
+      if (node.getAttribute('data-page-break') === 'true') {
+        result.push(new Paragraph({ children: [new PageBreak()], spacing: { after: 0, before: 0 } }));
+      } else if (tag === 'img') {
+        result.push(new Paragraph({ ...paragraphOptions(node), children: await imageRun(node as HTMLImageElement, context.maxImageWidth) }));
+      } else if (tag === 'ul' || tag === 'ol') {
         const reference = `list-${numbering.length}`;
         const level = Math.min(depth, 8);
         numbering.push({ reference, levels: Array.from({ length: 9 }, (_, i) => ({
@@ -205,15 +274,15 @@ export async function exportDocument(html: string, name: string, format: 'docx' 
           text: tag === 'ol' ? `%${i + 1}.` : '•', start: Number(node.getAttribute('start')) || 1,
           alignment: AlignmentType.LEFT, style: { paragraph: { indent: { left: (i + 1) * 720, hanging: 360 } } },
         })) });
-        const context: ListContext = { reference, level };
+        const listContext: ListContext = { reference, level };
         for (const item of Array.from(node.children)) {
           if (!(item instanceof HTMLElement) || item.tagName !== 'LI') continue;
           let first = true;
           let direct: Node[] = [];
           const addParagraph = async (element?: HTMLElement) => {
-            const children = await inline(element ? element.childNodes : direct, element ? runStyle(element, {}) : {});
+            const children = await inline(element ? element.childNodes : direct, element ? runStyle(element, {}) : {}, context);
             result.push(new Paragraph({ ...(element ? paragraphOptions(element) : {}), children,
-              numbering: first ? context : undefined, indent: first ? undefined : { left: (level + 1) * 720 }, spacing: { after: 100, line: paragraphLineSpacing(element || item) },
+              numbering: first ? listContext : undefined, indent: first ? undefined : { left: (level + 1) * 720 }, spacing: { after: 100, line: paragraphLineSpacing(element || item) },
             }));
             first = false;
             direct = [];
@@ -222,7 +291,9 @@ export async function exportDocument(html: string, name: string, format: 'docx' 
             if (child instanceof HTMLElement && /^(UL|OL)$/.test(child.tagName)) {
               if (direct.length || first) await addParagraph();
               const wrapper = document.createElement('div');
-              wrapper.appendChild(child.cloneNode(true));
+              // Keep node identity: comment anchors refer to the sanitized
+              // elements, including marks inside nested list items.
+              wrapper.appendChild(child);
               result.push(...await blocks(wrapper, depth + 1));
             } else if (child instanceof HTMLElement && /^(P|H[1-6])$/.test(child.tagName)) {
               if (direct.some(n => n.textContent?.trim())) await addParagraph();
@@ -233,32 +304,78 @@ export async function exportDocument(html: string, name: string, format: 'docx' 
         }
       } else if (tag === 'table') {
         const rows: TableRow[] = [];
-        for (const row of Array.from(node.querySelectorAll('tr')).filter(row => row.closest('table') === node)) {
+        const htmlRows = Array.from(node.querySelectorAll('tr')).filter(row => row.closest('table') === node);
+        type Span = { left: number; columns: number; fill?: string };
+        let spans = new Map<number, Span>();
+        for (const [rowIndex, row] of htmlRows.entries()) {
           const cells: TableCell[] = [];
+          const nextSpans = new Map<number, Span>();
+          let column = 0;
+          const continueSpans = () => {
+            while (spans.has(column)) {
+              const span = spans.get(column)!;
+              cells.push(new TableCell({ children: [new Paragraph('')], columnSpan: span.columns,
+                verticalMerge: VerticalMergeType.CONTINUE,
+                shading: span.fill ? { type: ShadingType.CLEAR, fill: span.fill } : undefined,
+              }));
+              if (span.left > 1) nextSpans.set(column, { ...span, left: span.left - 1 });
+              spans.delete(column);
+              column += span.columns;
+            }
+          };
           for (const cell of Array.from(row.children)) {
-            if (!(cell instanceof HTMLElement)) continue;
+            if (!(cell instanceof HTMLElement) || !['TD', 'TH'].includes(cell.tagName)) continue;
+            continueSpans();
             const children = await blocks(cell, depth);
             if (!children.length || children[children.length - 1] instanceof Table) children.push(new Paragraph(''));
-            cells.push(new TableCell({ children, columnSpan: Number(cell.getAttribute('colspan')) || 1,
-              shading: cell.tagName === 'TH' ? { fill: 'F1F5F9' } : undefined,
+            const columnSpan = Math.min(1000, Math.max(1, Math.floor(Number(cell.getAttribute('colspan'))) || 1));
+            const rowSpan = Math.min(htmlRows.length - rowIndex, Math.max(1, Math.floor(Number(cell.getAttribute('rowspan'))) || 1));
+            const fill = color(cell.style.backgroundColor || cell.getAttribute('bgcolor') || '') || (cell.tagName === 'TH' ? 'F1F5F9' : undefined);
+            cells.push(new TableCell({ children, columnSpan,
+              verticalMerge: rowSpan > 1 ? VerticalMergeType.RESTART : undefined,
+              shading: fill ? { type: ShadingType.CLEAR, fill } : undefined,
               margins: { top: 100, bottom: 100, left: 120, right: 120 },
             }));
+            if (rowSpan > 1) nextSpans.set(column, { left: rowSpan - 1, columns: columnSpan, fill });
+            column += columnSpan;
           }
-          if (cells.length) rows.push(new TableRow({ children: cells }));
+          while (spans.size) {
+            if (spans.has(column)) continueSpans();
+            else if (Math.min(...spans.keys()) < column) break;
+            else { cells.push(new TableCell({ children: [new Paragraph('')] })); column++; }
+          }
+          spans = nextSpans;
+          if (cells.length) rows.push(new TableRow({ children: cells, tableHeader: row.children.length > 0 && Array.from(row.children).every(cell => cell.tagName === 'TH') }));
         }
         if (rows.length) result.push(new Table({ rows, width: { size: 100, type: WidthType.PERCENTAGE } }));
       } else if (tag === 'div' || tag === 'blockquote') result.push(...await blocks(node, depth));
       else if (tag === 'hr') result.push(new Paragraph({ border: { bottom: { color: 'CBD5E1', style: BorderStyle.SINGLE, size: 6 } } }));
-      else result.push(new Paragraph({ ...paragraphOptions(node), children: await inline(node.childNodes, runStyle(node, {})) }));
+      else result.push(new Paragraph({ ...paragraphOptions(node), children: await inline(node.childNodes, runStyle(node, {}), context) }));
     }
     await flush();
     return result;
   }
 
   const children = await blocks(root);
-  const margin = { normal: 1440, narrow: 720, wide: 2160 }[options.margin || 'normal'];
+  // Comments whose selected text was deleted remain as point annotations at
+  // the end, with their original quote included in the comment itself.
+  const unanchoredComments = comments.map((_, id) => id).filter(id => !context.anchoredComments.has(id));
+  if (unanchoredComments.length) children.push(new Paragraph({ children: unanchoredComments.flatMap(id => [
+    new CommentRangeStart(id), new CommentRangeEnd(id), new TextRun({ children: [new CommentReference(id)] }),
+  ]) }));
+  const footerChildren: ParagraphChild[] = [];
+  if (options.footer) footerChildren.push(new TextRun({ text: options.footer, color: '64748B', size: 18 }));
+  if (options.pageNumbers) footerChildren.push(new TextRun({ text: options.footer ? ' · Page ' : 'Page ', size: 18 }), new TextRun({ children: [PageNumber.CURRENT], size: 18 }));
   const doc = new Document({
     title: name, creator: 'Folio', numbering: { config: numbering },
+    comments: comments.length ? { children: comments.map((comment, id) => ({
+      id, author: 'Folio', initials: 'F', date: new Date(Number.isFinite(comment.createdAt) ? comment.createdAt : Date.now()),
+      durableId: commentIdToParaId(id),
+      children: [
+        ...(!context.anchoredComments.has(id) && comment.quote ? [new Paragraph({ children: [new TextRun({ text: `Original selection: ${comment.quote}`, italics: true })] })] : []),
+        ...comment.text.split(/\r?\n/).map(text => new Paragraph(text)),
+      ],
+    })) } : undefined,
     styles: { default: {
       document: { run: { font: 'Arial', size: 22 }, paragraph: { spacing: { after: 160, line: 396 } } },
       heading1: { run: { font: 'Georgia', size: 60, bold: false, color: '243C2D' } },
@@ -266,9 +383,20 @@ export async function exportDocument(html: string, name: string, format: 'docx' 
       heading3: { run: { font: 'Arial', size: 28, bold: false, color: '456B4A' } },
     } },
     sections: [{ properties: { page: {
-      size: { width: 11906, height: 16838, orientation: options.landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
-      margin: { top: margin, right: margin, bottom: margin, left: margin },
-    } }, children: children.length ? children : [new Paragraph('')] }],
+      size: { width: paper.width, height: paper.height, orientation: options.landscape ? PageOrientation.LANDSCAPE : PageOrientation.PORTRAIT },
+      margin: { top: margin, right: margin, bottom: margin, left: margin, header: Math.min(720, margin / 2), footer: Math.min(720, margin / 2) },
+    } },
+    headers: options.header ? { default: new Header({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [new TextRun({ text: options.header, color: '64748B', size: 18 })] })] }) } : undefined,
+    footers: footerChildren.length ? { default: new Footer({ children: [new Paragraph({ alignment: AlignmentType.CENTER, children: footerChildren })] }) } : undefined,
+    children: children.length ? children : [new Paragraph('')] }],
   });
-  download(await Packer.toBlob(doc), `${filename}.docx`);
+  // docx emits resolved state only for reply threads. Register the standard
+  // extended-comments part explicitly so standalone comments keep that state.
+  const extraParts: { path: string; data: string }[] = [];
+  if (comments.length) {
+    doc.ContentTypes.addCommentsExtended();
+    doc.Document.Relationships.addRelationship('FolioCommentState', 'http://schemas.microsoft.com/office/2011/relationships/commentsExtended', 'commentsExtended.xml');
+    extraParts.push({ path: 'word/commentsExtended.xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">${comments.map((comment, id) => `<w15:commentEx w15:paraId="${commentIdToParaId(id)}" w15:done="${comment.resolved ? '1' : '0'}"/>`).join('')}</w15:commentsEx>` });
+  }
+  download(await Packer.toBlob(doc, false, extraParts), `${filename}.docx`);
 }
