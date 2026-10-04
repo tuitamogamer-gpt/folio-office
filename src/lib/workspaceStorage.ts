@@ -5,12 +5,20 @@ const STORE = 'state';
 const FILES_KEY = 'files';
 const LEGACY_KEY = 'folio-files-v1';
 const RECOVERY_KEY = 'folio-workspace-recovery-v1';
+const CANONICAL_MARKER_KEY = 'folio-workspace-canonical-v1';
 const MAX_MIRROR_CHARACTERS = 2_000_000;
 type SavedWorkspace = { files: OfficeFile[]; savedAt: number };
 let databasePromise: Promise<IDBDatabase> | undefined;
 let saveQueue: Promise<void> = Promise.resolve();
 let lastRevision = 0;
+let hydrationFailure: Error | undefined;
 const revision = () => (lastRevision = Math.max(Date.now(), lastRevision + 1));
+class IndexedDBUnavailableError extends Error {}
+function databaseOpenError(error: unknown) {
+  return error instanceof DOMException && ['SecurityError', 'NotSupportedError'].includes(error.name) ? new IndexedDBUnavailableError('This browser does not permit IndexedDB storage.', { cause: error }) : error;
+}
+function markCanonical() { try { globalThis.localStorage.setItem(CANONICAL_MARKER_KEY, '1'); } catch { /* The database itself remains canonical. */ } }
+function hasCanonicalMarker() { try { return globalThis.localStorage.getItem(CANONICAL_MARKER_KEY) === '1'; } catch { return true; } }
 
 function validFiles(value: unknown): value is OfficeFile[] {
   return Array.isArray(value) && value.every(file => file && typeof file === 'object' && typeof file.id === 'string' && typeof file.name === 'string' && ['document', 'spreadsheet', 'presentation'].includes(file.kind) && Object.hasOwn(file, 'content'));
@@ -35,13 +43,13 @@ function openDatabase(): Promise<IDBDatabase> {
     let settled = false;
     let request: IDBOpenDBRequest;
     try {
-      if (!globalThis.indexedDB) throw new Error('IndexedDB is unavailable.');
+      if (!globalThis.indexedDB) throw new IndexedDBUnavailableError('IndexedDB is unavailable.');
       request = globalThis.indexedDB.open(DATABASE, 1);
-    } catch (error) { reject(error); return; }
+    } catch (error) { reject(databaseOpenError(error)); return; }
     const timeout = setTimeout(() => finish(new Error('Opening workspace storage timed out.')), 4000);
     function finish(error: unknown) { if (settled) return; settled = true; clearTimeout(timeout); reject(error); }
     request.onupgradeneeded = () => { if (!request.result.objectStoreNames.contains(STORE)) request.result.createObjectStore(STORE); };
-    request.onerror = () => finish(request.error || new Error('Workspace storage could not be opened.'));
+    request.onerror = () => finish(databaseOpenError(request.error || new Error('Workspace storage could not be opened.')));
     request.onblocked = () => finish(new Error('Another browser tab is blocking workspace storage.'));
     request.onsuccess = () => {
       if (settled) { request.result.close(); return; }
@@ -104,13 +112,27 @@ function writeRecovery(snapshot: SavedWorkspace, mirrorOnly: boolean): void {
 
 /** A small synchronous safety copy for pagehide. A failed mirror never deletes the last good copy. */
 export function mirrorWorkspace(files: OfficeFile[]): boolean {
+  if (hydrationFailure) return false;
   try { writeRecovery({ files, savedAt: revision() }, true); return true; } catch { return false; }
 }
 
-/** Read canonical storage first, then migrate the original localStorage array if needed. */
+/** A read failure is not an empty workspace: callers must keep editing/autosave gated and offer retry. */
 export async function loadWorkspace(fallback: OfficeFile[]): Promise<OfficeFile[]> {
   let canonical: SavedWorkspace | undefined;
-  try { canonical = savedFrom(await readDatabase()); } catch { /* Browsers without IndexedDB can still use the original storage. */ }
+  try {
+    const stored = await readDatabase();
+    canonical = savedFrom(stored);
+    if (stored !== undefined && !canonical) throw new Error('The saved workspace could not be read.');
+    if (canonical) markCanonical();
+  } catch (error) {
+    // Missing browser support is a supported localStorage-only mode. An error opening or
+    // reading an available database may hide existing work, so never seed or migrate over it.
+    if (!(error instanceof IndexedDBUnavailableError) || hasCanonicalMarker()) {
+      hydrationFailure = new Error('Your saved workspace could not be opened. Retry to load it safely; your existing files have not been changed.', { cause: error });
+      throw hydrationFailure;
+    }
+  }
+  hydrationFailure = undefined;
   const recovery = readLocal(RECOVERY_KEY);
   if (canonical && (!recovery || recovery.savedAt <= canonical.savedAt)) return canonical.files;
   const local = recovery || readLocal(LEGACY_KEY);
@@ -123,12 +145,14 @@ export async function loadWorkspace(fallback: OfficeFile[]): Promise<OfficeFile[
 
 /** Serialize writes and resolve only when at least one persistent store has committed the snapshot. */
 export function saveWorkspace(files: OfficeFile[]): Promise<void> {
+  if (hydrationFailure) return Promise.reject(hydrationFailure);
   let snapshot: SavedWorkspace;
   try { snapshot = { files: structuredClone(files), savedAt: revision() }; } catch (error) { return Promise.reject(error); }
   const save = saveQueue.catch(() => {}).then(async () => {
     let databaseError: unknown;
     try {
       await writeDatabase(snapshot);
+      markCanonical();
       const recovery = readLocal(RECOVERY_KEY);
       if (!recovery || recovery.savedAt <= snapshot.savedAt) {
         // Never clear a newer pagehide snapshot when an older queued database write completes.
@@ -139,6 +163,7 @@ export function saveWorkspace(files: OfficeFile[]): Promise<void> {
           try { globalThis.localStorage.removeItem(LEGACY_KEY); } catch { /* Canonical storage is already durable. */ }
         }
       }
+      markCanonical();
       return;
     } catch (error) { databaseError = error; }
     try { writeRecovery(snapshot, false); }

@@ -104,4 +104,59 @@ try {
   expect((await dbRecord(fallbackPage)).files[0].name).toBe('Retry works');
   console.log('PASS: a failed database open is retried after IndexedDB becomes available.');
   await fallbackContext.close();
+
+  const readFailureContext = await browser.newContext();
+  const readFailurePage = await blankPage(readFailureContext);
+  const canonicalFiles = [sample('Canonical photos and history', `<p>${'B'.repeat(6 * 1024 * 1024)}</p>`)];
+  canonicalFiles[0].versions = [{ id: 'retained-version', name: 'Original images', createdAt: 1, content: 'Saved milestone' }];
+  await readFailurePage.evaluate(async files => (await import('/src/lib/workspaceStorage.ts')).saveWorkspace(files), canonicalFiles);
+  await readFailurePage.evaluate(files => localStorage.setItem('folio-files-v1', JSON.stringify(files)), legacy);
+  const readFailure = await readFailurePage.evaluate(async fallback => {
+    const storage = await import('/src/lib/workspaceStorage.ts');
+    const transaction = IDBDatabase.prototype.transaction;
+    IDBDatabase.prototype.transaction = function (...args) { if (args[1] === 'readonly') throw new DOMException('Temporary read error', 'UnknownError'); return transaction.apply(this, args); };
+    let loadRejected = false; let saveRejected = false;
+    try { await storage.loadWorkspace(fallback); } catch { loadRejected = true; }
+    finally { IDBDatabase.prototype.transaction = transaction; }
+    try { await storage.saveWorkspace(fallback); } catch { saveRejected = true; }
+    return { loadRejected, saveRejected, mirrorBlocked: !storage.mirrorWorkspace(fallback) };
+  }, [sample('Default starter document')]);
+  expect(readFailure).toEqual({ loadRejected: true, saveRejected: true, mirrorBlocked: true });
+  const stillCanonical = await dbRecord(readFailurePage);
+  expect(stillCanonical.files[0].name).toBe(canonicalFiles[0].name);
+  expect(stillCanonical.files[0].content.length).toBe(canonicalFiles[0].content.length);
+  const retriedLoad = await readFailurePage.evaluate(async () => { const files = await (await import('/src/lib/workspaceStorage.ts')).loadWorkspace([]); return { name: files[0].name, size: files[0].content.length, versions: files[0].versions }; });
+  expect(retriedLoad).toEqual({ name: canonicalFiles[0].name, size: canonicalFiles[0].content.length, versions: canonicalFiles[0].versions });
+  console.log('PASS: transient canonical read failure rejects startup and all writes; retry preserves large files over stale local/default data.');
+
+  await readFailurePage.reload();
+  const missingKnownDatabase = await readFailurePage.evaluate(async () => {
+    const original = window.indexedDB; Object.defineProperty(window, 'indexedDB', { configurable: true, value: undefined });
+    let rejected = false;
+    try { await (await import('/src/lib/workspaceStorage.ts')).loadWorkspace([]); } catch { rejected = true; }
+    finally { Object.defineProperty(window, 'indexedDB', { configurable: true, value: original }); }
+    return rejected;
+  });
+  expect(missingKnownDatabase).toBe(true);
+  expect((await dbRecord(readFailurePage)).files[0].name).toBe(canonicalFiles[0].name);
+  await readFailureContext.close();
+
+  const emptyContext = await browser.newContext();
+  const emptyPage = await blankPage(emptyContext);
+  expect(await emptyPage.evaluate(async files => (await import('/src/lib/workspaceStorage.ts')).loadWorkspace(files), latest)).toEqual(latest);
+  await emptyPage.evaluate(async () => (await import('/src/lib/workspaceStorage.ts')).saveWorkspace([]));
+  expect(await emptyPage.evaluate(async files => (await import('/src/lib/workspaceStorage.ts')).loadWorkspace(files), latest)).toEqual([]);
+  console.log('PASS: confirmed missing storage initializes normally, and an intentionally empty workspace stays empty.');
+  await emptyContext.close();
+
+  const disabledContext = await browser.newContext();
+  const disabledPage = await blankPage(disabledContext);
+  const disabledFallback = await disabledPage.evaluate(async files => {
+    IDBFactory.prototype.open = function () { throw new DOMException('IndexedDB disabled by browser settings', 'SecurityError'); };
+    const storage = await import('/src/lib/workspaceStorage.ts');
+    const loaded = await storage.loadWorkspace(files); await storage.saveWorkspace(loaded); return storage.loadWorkspace([]);
+  }, latest);
+  expect(disabledFallback).toEqual(latest);
+  console.log('PASS: browsers explicitly disabling IndexedDB still support localStorage-only workspaces.');
+  await disabledContext.close();
 } finally { await browser.close(); }
