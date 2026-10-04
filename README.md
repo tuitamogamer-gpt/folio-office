@@ -68,6 +68,7 @@ node tests/verify-workspace.mjs
 node tests/workspace-history.mjs
 node tests/workspace-storage.mjs
 node tests/workspace-async.mjs
+node tests/workspace-backup-fidelity.mjs
 node tests/document-tools.mjs
 node tests/doc-advanced-exports.mjs
 node tests/spreadsheet-editor.mjs

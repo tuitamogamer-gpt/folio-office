@@ -34,6 +34,17 @@ await page.getByRole('button',{name:'More options for Getting started with Folio
 await page.getByRole('button',{name:'Version history',exact:true}).click();
 await expect(page.locator('.version-item')).toHaveCount(2);
 await page.screenshot({path:'/tmp/folio-history.png'});
+await page.addInitScript(() => {
+  window.failWorkspaceReads=true;
+  const transaction=IDBDatabase.prototype.transaction;
+  IDBDatabase.prototype.transaction=function(...args){if(window.failWorkspaceReads && (args[1]===undefined||args[1]==='readonly'))throw new DOMException('Temporary read failure','UnknownError');return transaction.apply(this,args);};
+});
+await page.reload();
+await expect(page.getByRole('button',{name:'Retry opening workspace'})).toBeVisible();
+await expect(page.locator('.file-row')).toHaveCount(0);
+await page.evaluate(()=>{window.failWorkspaceReads=false;});
+await page.getByRole('button',{name:'Retry opening workspace'}).click();
+await expect(page.locator('.file-row')).toHaveCount(10);
 expect(errors).toEqual([]);
-console.log('PASS: save version, restore with current-draft recovery, reload, download workspace backup, restore copies with history.');
+console.log('PASS: save version, restore with current-draft recovery, reload, download workspace backup, restore copies with history, failed startup read retry preserves existing workspace.');
 await browser.close();

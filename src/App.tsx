@@ -28,6 +28,8 @@ export default function App(){
  const [files,setFilesState]=useState<OfficeFile[]>(readFiles);
  const filesRef=useRef(files);
  const [hydrated,setHydrated]=useState(false);
+ const [loadError,setLoadError]=useState(false);
+ const [loadAttempt,setLoadAttempt]=useState(0);
  const saveSequence=useRef(0);
  const autosaveTimer=useRef<ReturnType<typeof setTimeout>|null>(null);
  const versionActionPending=useRef(false);
@@ -66,7 +68,7 @@ export default function App(){
   try{await saveWorkspace(next);if(sequence===saveSequence.current){setSaved(true);setSaveError(false);}return true;}
   catch{if(sequence===saveSequence.current){setSaved(false);setSaveError(true);notify('Your changes are still open, but browser storage could not save them. Download a workspace backup to keep your work.');}return false;}
  }
- useEffect(()=>{let active=true;loadWorkspace(readFiles()).then(restored=>{if(active){setFiles(restored);setHydrated(true);}}).catch(()=>{if(active){setHydrated(true);setToast('Browser storage could not be opened. Download a backup to keep your work.');}});return()=>{active=false}},[]);
+ useEffect(()=>{let active=true;setLoadError(false);loadWorkspace(readFiles()).then(restored=>{if(active){setFiles(restored);setHydrated(true);}}).catch(()=>{if(active)setLoadError(true);});return()=>{active=false}},[loadAttempt]);
  useEffect(()=>{if(!hydrated)return;const sequence=saveSequence.current;const id=setTimeout(()=>{if(autosaveTimer.current===id)autosaveTimer.current=null;void persistFiles(files,sequence);},250);autosaveTimer.current=id;return()=>{clearTimeout(id);if(autosaveTimer.current===id)autosaveTimer.current=null;}},[files,hydrated]);
  useEffect(()=>{if(!hydrated)return;const flush=()=>{cancelAutosave();const current=filesRef.current;mirrorWorkspace(current);void persistFiles(current,saveSequence.current);};const hidden=()=>{if(document.visibilityState==='hidden')flush();};window.addEventListener('pagehide',flush);document.addEventListener('visibilitychange',hidden);return()=>{window.removeEventListener('pagehide',flush);document.removeEventListener('visibilitychange',hidden)}},[hydrated]);
  useEffect(()=>{if(!toast)return;const id=setTimeout(()=>setToast(''),5000);return()=>clearTimeout(id)},[toast]);
@@ -103,7 +105,7 @@ export default function App(){
  const initials=profileName.split(' ').map(n=>n[0]).slice(0,2).join('').toUpperCase();
  const filteredTemplates=templates.filter(t=>(templateFilter==='All templates'||labels[t.kind]+'s'===templateFilter)&&t.name.toLowerCase().includes(query.toLowerCase()));
  const editorProps:EditorProps|null=activeFile?{file:activeFile,onBack:()=>setActiveId(null),onChange:(content:any)=>updateFile(activeFile.id,{content,updatedAt:Date.now()}),onRename:(name:string)=>{if(name.trim())updateFile(activeFile.id,{name:name.trim(),updatedAt:Date.now()})},onPageSetupChange:(pageSetup:NonNullable<OfficeFile['pageSetup']>)=>updateFile(activeFile.id,{pageSetup,updatedAt:Date.now()}),onCommentsChange:(comments)=>updateFile(activeFile.id,{comments,updatedAt:Date.now()}),onOpenVersions:()=>setModal({kind:'versions',id:activeFile.id}),saveState:saveError?'error':saved?'saved':'saving',onNotify:notify}:null;
- if(!hydrated)return <div className="editor-loading"><Logo/><LoaderCircle className="spinning"/><span>Opening your workspace…</span></div>;
+ if(!hydrated)return <div className="editor-loading"><Logo/>{loadError?<><span>Your saved workspace could not be opened.</span><small>Your files have not been replaced. Try opening them again.</small><button className="button primary" onClick={()=>setLoadAttempt(n=>n+1)}>Retry opening workspace</button></>:<><LoaderCircle className="spinning"/><span>Opening your workspace…</span></>}</div>;
  return <>{activeFile&&editorProps?<div className="editor-shell"><Suspense fallback={<div className="editor-loading"><Logo/><LoaderCircle className="spinning"/><span>Opening your {labels[activeFile.kind].toLowerCase()}…</span></div>}>{activeFile.kind==='document'?<DocumentEditor key={`${activeFile.id}:${editorEpoch}`} {...editorProps}/>:activeFile.kind==='spreadsheet'?<SpreadsheetEditor key={`${activeFile.id}:${editorEpoch}`} {...editorProps}/>:<PresentationEditor key={`${activeFile.id}:${editorEpoch}`} {...editorProps}/>}</Suspense>{saveError&&<div className="save-error-banner">Changes could not be saved in this browser. Download a copy to keep your work.<button onClick={downloadBackup}>Back up workspace</button></div>}</div>:<div className="app-shell">
  {sidebarOpen&&<div className="sidebar-scrim" onClick={()=>setSidebarOpen(false)}/>}
  <aside className={`sidebar ${sidebarOpen?'open':''}`}>
