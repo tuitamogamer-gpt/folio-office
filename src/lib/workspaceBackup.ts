@@ -9,9 +9,11 @@ export function createBackup(files: OfficeFile[]): Blob {
   return new Blob([JSON.stringify({format:'folio-workspace',version:1,exportedAt:new Date().toISOString(),files},null,2)],{type:'application/json'});
 }
 const record = (v: unknown): v is Record<string,unknown> => !!v && typeof v==='object'&&!Array.isArray(v);
-function text(v:unknown,limit=100000){return typeof v==='string'?v.slice(0,limit):'';}
-function pageSetup(v:unknown):DocumentPageSetup|undefined{if(!record(v))return;return {landscape:v.landscape===true,margin:['normal','narrow','wide'].includes(String(v.margin))?v.margin as DocumentPageSetup['margin']:'normal',size:['a4','letter','legal'].includes(String(v.size))?v.size as DocumentPageSetup['size']:'a4',header:text(v.header,500),footer:text(v.footer,500),pageNumbers:v.pageNumbers===true};}
-function comments(v:unknown):DocumentComment[]{if(!Array.isArray(v))return [];return v.slice(0,1000).filter(record).map(c=>({id:text(c.id,100)||id(),text:text(c.text,5000),quote:text(c.quote,5000),createdAt:typeof c.createdAt==='number'?c.createdAt:Date.now(),resolved:c.resolved===true}));}
+// Backup restoration validates types without shortening valid user content.
+// Editor input limits do not apply to text that came from an Office import.
+function text(v:unknown){return typeof v==='string'?v:'';}
+function pageSetup(v:unknown):DocumentPageSetup|undefined{if(!record(v))return;return {landscape:v.landscape===true,margin:['normal','narrow','wide'].includes(String(v.margin))?v.margin as DocumentPageSetup['margin']:'normal',size:['a4','letter','legal'].includes(String(v.size))?v.size as DocumentPageSetup['size']:'a4',header:text(v.header),footer:text(v.footer),pageNumbers:v.pageNumbers===true};}
+function comments(v:unknown):DocumentComment[]{if(!Array.isArray(v))return [];return v.filter(record).map(c=>({id:text(c.id)||id(),text:text(c.text),quote:text(c.quote),createdAt:typeof c.createdAt==='number'?c.createdAt:Date.now(),resolved:c.resolved===true}));}
 function checkContent(kind:OfficeFile['kind'],content:unknown):string|SheetContent|SlideData[]{
  if(kind==='document'){if(typeof content!=='string')throw Error('A document in this backup has invalid content.');return DOMPurify.sanitize(content,{USE_PROFILES:{html:true},FORBID_TAGS:['script','iframe','object','embed','form']});}
  if(kind==='spreadsheet'){
@@ -32,8 +34,8 @@ export async function readBackup(file: File): Promise<OfficeFile[]> {
  for(const item of data.files){
   if(!record(item)||!['document','spreadsheet','presentation'].includes(String(item.kind))||typeof item.name!=='string')throw Error('This backup contains an invalid file.');
   const kind=item.kind as OfficeFile['kind'];
-  const versions:FileVersion[]=Array.isArray(item.versions)?item.versions.slice(0,10).filter(record).map(v=>({id:id(),name:text(v.name,100)||'Saved version',createdAt:typeof v.createdAt==='number'?v.createdAt:Date.now(),content:checkContent(kind,v.content),pageSetup:pageSetup(v.pageSetup),comments:comments(v.comments)})):[];
-  restored.push({id:id(),name:item.name.slice(0,160)||'Restored file',kind,content:checkContent(kind,item.content),createdAt:typeof item.createdAt==='number'?item.createdAt:Date.now(),updatedAt:Date.now(),starred:item.starred===true,trashed:item.trashed===true,pageSetup:pageSetup(item.pageSetup),comments:comments(item.comments),versions});
+  const versions:FileVersion[]=Array.isArray(item.versions)?item.versions.slice(0,10).filter(record).map(v=>({id:id(),name:text(v.name)||'Saved version',createdAt:typeof v.createdAt==='number'?v.createdAt:Date.now(),content:checkContent(kind,v.content),pageSetup:pageSetup(v.pageSetup),comments:comments(v.comments)})):[];
+  restored.push({id:id(),name:item.name||'Restored file',kind,content:checkContent(kind,item.content),createdAt:typeof item.createdAt==='number'?item.createdAt:Date.now(),updatedAt:Date.now(),starred:item.starred===true,trashed:item.trashed===true,pageSetup:pageSetup(item.pageSetup),comments:comments(item.comments),versions});
  }
  return restored;
 }
