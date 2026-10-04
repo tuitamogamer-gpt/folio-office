@@ -1,0 +1,13 @@
+import { chromium } from '@playwright/test';
+const browser=await chromium.launch({headless:true,executablePath:'/usr/bin/chromium',args:['--no-sandbox']});
+const page=await browser.newPage({viewport:{width:1440,height:1080},deviceScaleFactor:1});
+const errors=[];page.on('pageerror',e=>errors.push(e.message));
+await page.goto('http://localhost:5173');await page.waitForLoadState('networkidle');
+await page.screenshot({path:'/tmp/folio-home.png',fullPage:true});
+console.log('heading',await page.locator('h1').innerText());console.log('files',await page.locator('.file-row').count());
+await page.getByRole('button',{name:'New document',exact:false}).click();await page.waitForTimeout(1000);console.log('doc opened',await page.locator('.tiptap').count());await page.screenshot({path:'/tmp/folio-doc-integrated.png',fullPage:true});
+console.log('errors',errors);
+await page.goto('http://localhost:5173');await page.waitForTimeout(500);
+await page.setViewportSize({width:390,height:844});await page.screenshot({path:'/tmp/folio-mobile.png',fullPage:true});
+console.log('mobile horizontal',await page.evaluate(()=>({scroll:document.documentElement.scrollWidth,width:innerWidth})));
+await browser.close();

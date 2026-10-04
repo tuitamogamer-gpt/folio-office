@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.git/
+.env*
+*.log
+playwright-report/
+test-results/
+scratch/
+shared/
+library-files/
