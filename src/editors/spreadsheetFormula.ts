@@ -5,6 +5,48 @@ type Value = Scalar | { kind: 'reference'; value: Scalar } | { kind: 'range'; ro
 type Token = { kind: 'number' | 'string' | 'name' | 'quoted' | 'symbol' | 'error'; text: string };
 type Node = { kind: 'literal'; value: Scalar } | { kind: 'reference'; sheet?: string; ref: string } | { kind: 'range'; start: Extract<Node, { kind: 'reference' }>; end: Extract<Node, { kind: 'reference' }> } | { kind: 'unary'; op: string; node: Node } | { kind: 'binary'; op: string; left: Node; right: Node } | { kind: 'call'; name: string; args: Node[] };
 export interface FormulaContext { sheets: SheetTab[]; currentSheetId: string; }
+export interface FormulaDefinition { name: string; signature: string; description: string; category: string; example: string; }
+export const FORMULA_CATALOG: readonly FormulaDefinition[] = [
+  { name: 'SUM', signature: 'SUM(number1, [number2], …)', description: 'Add numbers and ranges.', category: 'Math', example: '=SUM(B2:B10)' },
+  { name: 'AVERAGE', signature: 'AVERAGE(number1, [number2], …)', description: 'Find the arithmetic mean of numeric values.', category: 'Statistics', example: '=AVERAGE(B2:B10)' },
+  { name: 'MIN', signature: 'MIN(number1, [number2], …)', description: 'Find the smallest numeric value.', category: 'Statistics', example: '=MIN(B2:B10)' },
+  { name: 'MAX', signature: 'MAX(number1, [number2], …)', description: 'Find the largest numeric value.', category: 'Statistics', example: '=MAX(B2:B10)' },
+  { name: 'COUNT', signature: 'COUNT(value1, [value2], …)', description: 'Count cells containing numbers.', category: 'Statistics', example: '=COUNT(B2:B10)' },
+  { name: 'COUNTA', signature: 'COUNTA(value1, [value2], …)', description: 'Count nonempty cells, including text and errors.', category: 'Statistics', example: '=COUNTA(A2:A10)' },
+  { name: 'COUNTIF', signature: 'COUNTIF(range, criteria)', description: 'Count matching cells; criteria support comparisons and wildcards.', category: 'Statistics', example: '=COUNTIF(B2:B10,">=100")' },
+  { name: 'COUNTIFS', signature: 'COUNTIFS(criteria_range1, criteria1, [criteria_range2, criteria2], …)', description: 'Count rows matching every condition across ranges of the same size.', category: 'Statistics', example: '=COUNTIFS(A2:A10,"Paid",B2:B10,">100")' },
+  { name: 'SUMIF', signature: 'SUMIF(range, criteria, [sum_range])', description: 'Add numbers whose corresponding cells match a condition.', category: 'Math', example: '=SUMIF(A2:A10,"Paid",B2:B10)' },
+  { name: 'SUMIFS', signature: 'SUMIFS(sum_range, criteria_range1, criteria1, [criteria_range2, criteria2], …)', description: 'Add numbers matching every condition across ranges of the same size.', category: 'Math', example: '=SUMIFS(C2:C10,A2:A10,"Paid",B2:B10,">100")' },
+  { name: 'IF', signature: 'IF(logical_test, value_if_true, [value_if_false])', description: 'Choose a result; only the selected branch is calculated.', category: 'Logical', example: '=IF(B2>=100,"On target","Below target")' },
+  { name: 'IFERROR', signature: 'IFERROR(value, value_if_error)', description: 'Use a fallback when a calculation returns an error.', category: 'Logical', example: '=IFERROR(B2/C2,0)' },
+  { name: 'AND', signature: 'AND(logical1, [logical2], …)', description: 'Return TRUE when every condition is true.', category: 'Logical', example: '=AND(B2>0,C2="Paid")' },
+  { name: 'OR', signature: 'OR(logical1, [logical2], …)', description: 'Return TRUE when at least one condition is true.', category: 'Logical', example: '=OR(B2>100,C2="Priority")' },
+  { name: 'NOT', signature: 'NOT(logical)', description: 'Reverse TRUE and FALSE.', category: 'Logical', example: '=NOT(B2=0)' },
+  { name: 'ROUND', signature: 'ROUND(number, num_digits)', description: 'Round to a number of decimal places.', category: 'Math', example: '=ROUND(B2,2)' },
+  { name: 'ROUNDUP', signature: 'ROUNDUP(number, num_digits)', description: 'Round away from zero.', category: 'Math', example: '=ROUNDUP(B2,2)' },
+  { name: 'ROUNDDOWN', signature: 'ROUNDDOWN(number, num_digits)', description: 'Round toward zero.', category: 'Math', example: '=ROUNDDOWN(B2,2)' },
+  { name: 'ABS', signature: 'ABS(number)', description: 'Return the absolute value.', category: 'Math', example: '=ABS(B2)' },
+  { name: 'SQRT', signature: 'SQRT(number)', description: 'Find the square root of a nonnegative number.', category: 'Math', example: '=SQRT(B2)' },
+  { name: 'POWER', signature: 'POWER(number, power)', description: 'Raise a number to a power.', category: 'Math', example: '=POWER(B2,2)' },
+  { name: 'MOD', signature: 'MOD(number, divisor)', description: 'Return the remainder with the divisor’s sign.', category: 'Math', example: '=MOD(B2,7)' },
+  { name: 'MEDIAN', signature: 'MEDIAN(number1, [number2], …)', description: 'Find the middle numeric value.', category: 'Statistics', example: '=MEDIAN(B2:B10)' },
+  { name: 'LEN', signature: 'LEN(text)', description: 'Count characters in text.', category: 'Text', example: '=LEN(A2)' },
+  { name: 'LEFT', signature: 'LEFT(text, [num_chars])', description: 'Take characters from the beginning of text.', category: 'Text', example: '=LEFT(A2,3)' },
+  { name: 'RIGHT', signature: 'RIGHT(text, [num_chars])', description: 'Take characters from the end of text.', category: 'Text', example: '=RIGHT(A2,3)' },
+  { name: 'MID', signature: 'MID(text, start_num, num_chars)', description: 'Extract text starting at a position, counting from 1.', category: 'Text', example: '=MID(A2,2,4)' },
+  { name: 'CONCAT', signature: 'CONCAT(text1, [text2], …)', description: 'Join text and ranges.', category: 'Text', example: '=CONCAT(A2," ",B2)' },
+  { name: 'CONCATENATE', signature: 'CONCATENATE(text1, [text2], …)', description: 'Join text values.', category: 'Text', example: '=CONCATENATE(A2," ",B2)' },
+  { name: 'TRIM', signature: 'TRIM(text)', description: 'Remove extra spaces between and around words.', category: 'Text', example: '=TRIM(A2)' },
+  { name: 'UPPER', signature: 'UPPER(text)', description: 'Convert text to uppercase.', category: 'Text', example: '=UPPER(A2)' },
+  { name: 'LOWER', signature: 'LOWER(text)', description: 'Convert text to lowercase.', category: 'Text', example: '=LOWER(A2)' },
+  { name: 'TODAY', signature: 'TODAY()', description: 'Return today’s Excel date number; apply Date formatting to display it.', category: 'Date', example: '=TODAY()' },
+  { name: 'DATE', signature: 'DATE(year, month, day)', description: 'Build an Excel date number from a year, month and day.', category: 'Date', example: '=DATE(2026,10,1)' },
+  { name: 'VLOOKUP', signature: 'VLOOKUP(lookup_value, table_array, col_index_num, [range_lookup])', description: 'Search the first column. FALSE gives an exact match; TRUE or omitted requires ascending keys for an approximate match.', category: 'Lookup', example: '=VLOOKUP(A2,F2:H10,3,FALSE)' },
+  { name: 'HLOOKUP', signature: 'HLOOKUP(lookup_value, table_array, row_index_num, [range_lookup])', description: 'Search the first row. FALSE gives an exact match; TRUE or omitted requires ascending keys for an approximate match.', category: 'Lookup', example: '=HLOOKUP(A2,F1:J3,3,FALSE)' },
+  { name: 'INDEX', signature: 'INDEX(array, row_num, [column_num])', description: 'Return a value by row and column. Zero selects a whole row or column for another function.', category: 'Lookup', example: '=INDEX(B2:D10,3,2)' },
+  { name: 'MATCH', signature: 'MATCH(lookup_value, lookup_array, [match_type])', description: 'Find a position. Use 0 for exact, 1 for ascending approximate, or -1 for descending approximate.', category: 'Lookup', example: '=MATCH(A2,F2:F10,0)' },
+  { name: 'XLOOKUP', signature: 'XLOOKUP(lookup_value, lookup_array, return_array, [if_not_found], [match_mode], [search_mode])', description: 'Exact match by default; match modes -1/1 choose the next smaller/larger value and 2 enables wildcards. Search 1/-1 scans first/last; 2/-2 requires sorted ascending/descending keys and excludes wildcards.', category: 'Lookup', example: '=XLOOKUP(A2,F2:F10,G2:G10,"Not found")' },
+];
 class FormulaError extends Error {}
 const fail = (code = '#VALUE!'): never => { throw new FormulaError(code); };
 const MAX_ROW = 1048576;
@@ -125,6 +167,64 @@ function truth(value: Value): boolean {
   return Boolean(result);
 }
 function values(value: Value): Scalar[] { return value && typeof value === 'object' && !(value instanceof FormulaError) ? value.kind === 'range' ? value.rows.flat() : [value.value] : [value]; }
+function matrix(value: Value, requireRange = false): Scalar[][] {
+  if (value && typeof value === 'object' && !(value instanceof FormulaError)) return value.kind === 'range' ? value.rows : [[value.value]];
+  checked(value);
+  if (requireRange) return fail();
+  return [[value as Scalar]];
+}
+function vector(value: Value): Scalar[] {
+  const rows = matrix(value);
+  if (rows.length !== 1 && rows[0].length !== 1) return fail('#N/A');
+  return rows.flat();
+}
+function wildcardPattern(pattern: string): RegExp {
+  let source = '^';
+  for (let index = 0; index < pattern.length; index++) {
+    const char = pattern[index];
+    if (char === '~' && index + 1 < pattern.length && /[~*?]/.test(pattern[index + 1])) source += pattern[++index].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    else if (char === '*') source += '.*';
+    else if (char === '?') source += '.';
+    else source += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+  return new RegExp(`${source}$`, 'is');
+}
+function lookupDifference(candidate: Scalar, lookup: Exclude<Scalar, FormulaError>): number | null {
+  if (candidate instanceof FormulaError) throw candidate;
+  if (lookup === null) lookup = 0;
+  if (candidate === null) candidate = typeof lookup === 'string' ? '' : typeof lookup === 'boolean' ? false : 0;
+  return typeof candidate === typeof lookup ? compare(candidate, lookup) : null;
+}
+function lookupIndex(lookup: Exclude<Scalar, FormulaError>, entries: Scalar[], mode: 'exact' | 'wildcard' | 'smaller' | 'larger', reverse = false, lastApproximate = false): number {
+  const wildcard = mode === 'wildcard' && typeof lookup === 'string' ? wildcardPattern(lookup) : undefined;
+  let closest = -1;
+  for (let step = 0; step < entries.length; step++) {
+    const index = reverse ? entries.length - step - 1 : step;
+    const candidate = entries[index];
+    const difference = lookupDifference(candidate, lookup);
+    const exact = wildcard ? typeof candidate === 'string' && wildcard.test(candidate) : difference === 0;
+    if (exact && (!lastApproximate || mode === 'exact' || mode === 'wildcard')) return index;
+    if (difference === null || (mode !== 'smaller' && mode !== 'larger')) continue;
+    if ((mode === 'smaller' && difference > 0) || (mode === 'larger' && difference < 0)) continue;
+    const improvement = closest < 0 ? 0 : compare(candidate, entries[closest]);
+    if (closest < 0 || (mode === 'smaller' ? improvement > 0 : improvement < 0) || (lastApproximate && improvement === 0)) closest = index;
+  }
+  return closest;
+}
+function binaryLookupIndex(lookup: Exclude<Scalar, FormulaError>, entries: Scalar[], mode: number, descending: boolean): number {
+  if (mode === 2) return fail(); // Wildcards cannot define the ordering required by a binary search.
+  let low = 0; let high = entries.length - 1;
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const difference = lookupDifference(entries[middle], lookup);
+    if (difference === 0) return middle;
+    const order = difference ?? compare(entries[middle], lookup);
+    if (descending ? order > 0 : order < 0) low = middle + 1; else high = middle - 1;
+  }
+  if (mode === 0) return -1;
+  const index = mode === -1 ? descending ? low : high : descending ? high : low;
+  return index >= 0 && index < entries.length && lookupDifference(entries[index], lookup) !== null ? index : -1;
+}
 function compare(left: Value, right: Value): number {
   let a = checked(left); let b = checked(right);
   if (a === null) a = typeof b === 'string' ? '' : typeof b === 'boolean' ? false : 0;
@@ -144,13 +244,7 @@ function criteriaMatcher(criteria: Value): (value: Scalar) => boolean {
   const match = criterion.match(/^(<>|<=|>=|=|<|>)(.*)$/s);
   const op = match?.[1] || '='; const desired = match?.[2] ?? criterion;
   const numeric = desired.trim() !== '' && /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(desired.trim()) ? Number(desired) : null;
-  let pattern = '^';
-  for (let i = 0; i < desired.length; i++) {
-    const char = desired[i];
-    if (char === '~' && i + 1 < desired.length) pattern += desired[++i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    else if (char === '*') pattern += '.*'; else if (char === '?') pattern += '.'; else pattern += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  }
-  const wildcard = new RegExp(`${pattern}$`, 'i');
+  const wildcard = wildcardPattern(desired);
   return value => {
     if (value instanceof FormulaError) return false;
     let comparison: number;
@@ -219,7 +313,8 @@ export function calculateCells(cells: Record<string, string>, context?: FormulaC
           if (node.op === '/' && b === 0) return fail('#DIV/0!');
           return finite(node.op === '+' ? a + b : node.op === '-' ? a - b : node.op === '*' ? a * b : node.op === '/' ? a / b : a ** b);
         }
-        const { name, args } = node;
+        const name = node.name.replace(/^_XLFN\.(?:_XLWS\.)?/, '');
+        const { args } = node;
         const arity = (min: number, max = min) => { if (args.length < min || args.length > max) fail(); };
         const arg = (index: number, fallback: Scalar = null) => args[index] ? run(args[index]) : fallback;
         if (name === 'IF') { arity(2, 3); return truth(arg(0)) ? arg(1) : args.length === 3 ? arg(2) : false; }
@@ -254,6 +349,73 @@ export function calculateCells(cells: Record<string, string>, context?: FormulaC
           const sums = args.length === 3 ? values(arg(2)) : entries;
           if (sums.length !== entries.length) return fail();
           return finite(entries.reduce<number>((sum, value, index) => { if (!matches(value)) return sum; const add = sums[index]; if (add instanceof FormulaError) throw add; return sum + (typeof add === 'number' ? add : 0); }, 0));
+        }
+        if (name === 'COUNTIFS' || name === 'SUMIFS') {
+          const start = name === 'SUMIFS' ? 1 : 0;
+          arity(start + 2, start + 254);
+          if ((args.length - start) % 2 !== 0) return fail();
+          const sumRows = name === 'SUMIFS' ? matrix(arg(0), true) : undefined;
+          let height = sumRows?.length; let width = sumRows?.[0].length;
+          const conditions: Array<{ cells: Scalar[]; matches: (value: Scalar) => boolean }> = [];
+          for (let index = start; index < args.length; index += 2) {
+            const rows = matrix(arg(index), true);
+            height ??= rows.length; width ??= rows[0].length;
+            if (rows.length !== height || rows[0].length !== width) return fail();
+            conditions.push({ cells: rows.flat(), matches: criteriaMatcher(arg(index + 1)) });
+          }
+          const sums = sumRows?.flat(); let result = 0;
+          for (let index = 0; index < conditions[0].cells.length; index++) {
+            if (!conditions.every(condition => condition.matches(condition.cells[index]))) continue;
+            if (!sums) { result++; continue; }
+            const value = sums[index]; if (value instanceof FormulaError) throw value;
+            if (typeof value === 'number') result += value;
+          }
+          return finite(result);
+        }
+        if (name === 'INDEX') {
+          arity(2, 3);
+          const rows = matrix(arg(0));
+          let row = Math.trunc(number(arg(1))); let column = args.length === 3 ? Math.trunc(number(arg(2))) : rows[0].length > 1 ? 0 : 1;
+          if (args.length === 2 && rows.length === 1) { column = row; row = 1; }
+          if (row < 0 || column < 0) return fail();
+          if (row > rows.length || column > rows[0].length) return fail('#REF!');
+          if (row === 0 || column === 0) {
+            const selected = row === 0 ? column === 0 ? rows : rows.map(line => [line[column - 1]]) : [rows[row - 1]];
+            return selected.length === 1 && selected[0].length === 1 ? { kind: 'reference', value: selected[0][0] } : { kind: 'range', rows: selected };
+          }
+          return { kind: 'reference', value: rows[row - 1][column - 1] };
+        }
+        if (name === 'MATCH') {
+          arity(2, 3);
+          const lookup = checked(arg(0)); const entries = vector(arg(1)); const matchType = number(arg(2, 1));
+          if (![0, 1, -1].includes(matchType)) return fail();
+          const index = lookupIndex(lookup, entries, matchType === 0 ? 'wildcard' : matchType === 1 ? 'smaller' : 'larger', false, matchType !== 0);
+          return index < 0 ? fail('#N/A') : index + 1;
+        }
+        if (name === 'VLOOKUP' || name === 'HLOOKUP') {
+          arity(3, 4);
+          const lookup = checked(arg(0)); const rows = matrix(arg(1)); const ordinal = Math.trunc(number(arg(2)));
+          const vertical = name === 'VLOOKUP'; const approximate = truth(arg(3, true));
+          if (ordinal < 1) return fail();
+          if (ordinal > (vertical ? rows[0].length : rows.length)) return fail('#REF!');
+          const index = lookupIndex(lookup, vertical ? rows.map(line => line[0]) : rows[0], approximate ? 'smaller' : 'wildcard', false, approximate);
+          if (index < 0) return fail('#N/A');
+          return { kind: 'reference', value: vertical ? rows[index][ordinal - 1] : rows[ordinal - 1][index] };
+        }
+        if (name === 'XLOOKUP') {
+          arity(3, 6);
+          const lookup = checked(arg(0)); const lookupRows = matrix(arg(1)); const returnRows = matrix(arg(2));
+          if (lookupRows.length !== 1 && lookupRows[0].length !== 1) return fail();
+          const vertical = lookupRows[0].length === 1;
+          if (vertical ? returnRows.length !== lookupRows.length : returnRows[0].length !== lookupRows[0].length) return fail();
+          const entries = lookupRows.flat();
+          const omitted = (index: number) => !args[index] || (args[index].kind === 'literal' && args[index].value === null);
+          const matchMode = omitted(4) ? 0 : number(arg(4)); const searchMode = omitted(5) ? 1 : number(arg(5));
+          if (![0, -1, 1, 2].includes(matchMode) || ![1, -1, 2, -2].includes(searchMode)) return fail();
+          const index = Math.abs(searchMode) === 2 ? binaryLookupIndex(lookup, entries, matchMode, searchMode === -2) : lookupIndex(lookup, entries, matchMode === 0 ? 'exact' : matchMode === 2 ? 'wildcard' : matchMode === -1 ? 'smaller' : 'larger', searchMode === -1);
+          if (index < 0) return !omitted(3) ? arg(3) : fail('#N/A');
+          const selected = vertical ? [returnRows[index]] : returnRows.map(line => [line[index]]);
+          return selected.length === 1 && selected[0].length === 1 ? { kind: 'reference', value: selected[0][0] } : { kind: 'range', rows: selected };
         }
         if (name === 'AND' || name === 'OR') {
           arity(1, 255); const bools: boolean[] = [];

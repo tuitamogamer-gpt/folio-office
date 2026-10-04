@@ -1,0 +1,122 @@
+import { chromium, expect } from '@playwright/test';
+import JSZip from 'jszip';
+import { readFile } from 'node:fs/promises';
+
+const browser = await chromium.launch({ headless: true, executablePath: '/usr/bin/chromium', args: ['--no-sandbox'] });
+const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+const errors = []; page.on('pageerror', error => errors.push(error.message));
+const base = process.env.BASE_URL || 'http://localhost:5173';
+try {
+  await page.goto(base);
+  await expect(page.locator('.file-row')).toHaveCount(5);
+  await page.keyboard.press('Control+k');
+  await expect(page.getByRole('dialog', { name: 'Search files and commands' })).toBeVisible();
+  const search = page.getByRole('combobox', { name: 'Search files and actions' });
+  await search.fill('marketing budget');
+  await expect(page.getByRole('option')).toHaveCount(1);
+  await search.press('Enter');
+  await expect(page.getByLabel('Spreadsheet title')).toHaveValue('Q3 marketing budget');
+  await page.keyboard.press('Control+k');
+  await search.fill('version history');
+  await search.press('Enter');
+  await expect(page.getByRole('dialog', { name: 'Version history' })).toBeVisible();
+  await page.getByLabel('Close version history').click();
+  await page.getByRole('button', { name: 'Back to workspace', exact: true }).click();
+  await page.getByRole('button', { name: 'Open command menu' }).filter({ visible: true }).click();
+  await search.fill('new document');
+  await search.press('Enter');
+  await expect(page.locator('.tiptap')).toBeVisible();
+  await page.getByLabel('Document name').fill('Command draft');
+  await page.getByLabel('Document name').press('Enter');
+  await page.locator('.tiptap').fill('A draft created through the command menu.');
+  await page.getByRole('button', { name: 'Back to workspace', exact: true }).click();
+  await expect(page.locator('.file-row')).toHaveCount(6);
+
+  const names = ['Getting started with Folio', 'Q3 marketing budget', 'Brand strategy presentation'];
+  for (const name of names) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
+  const toolbar = page.getByRole('toolbar', { name: 'Selected file actions' });
+  await expect(toolbar).toContainText('3 selected');
+  await expect(page.getByRole('checkbox', { name: 'Select all visible files' })).toHaveJSProperty('indeterminate', true);
+  const downloadEvent = page.waitForEvent('download');
+  await toolbar.getByRole('button', { name: 'Download ZIP' }).click();
+  const download = await downloadEvent;
+  await download.saveAs('/tmp/folio-workspace-selection.zip');
+  const archive = await JSZip.loadAsync(await readFile('/tmp/folio-workspace-selection.zip'));
+  const paths = Object.keys(archive.files);
+  expect(paths).toHaveLength(3);
+  for (const extension of ['docx', 'xlsx', 'pptx']) {
+    const path = paths.find(path => path.endsWith(`.${extension}`));
+    expect(path).toBeTruthy();
+    const office = await JSZip.loadAsync(await archive.file(path).async('nodebuffer'));
+    expect(office.file('[Content_Types].xml')).toBeTruthy();
+  }
+  await toolbar.getByRole('button', { name: 'Star', exact: true }).click();
+  for (const name of names) await expect(page.getByRole('button', { name: `Unstar ${name}`, exact: true })).toBeVisible();
+  await toolbar.getByRole('button', { name: 'Move to trash' }).click();
+  await expect(page.locator('.file-row')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(page.locator('.file-row')).toHaveCount(6);
+  await expect(toolbar).toHaveCount(0);
+
+  for (const name of names) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
+  await page.getByLabel('Search files', { exact: true }).fill('Weekly');
+  await expect(toolbar).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: 'Select Weekly team notes' })).not.toBeChecked();
+  await page.getByLabel('Search files', { exact: true }).fill('');
+  for (const name of names) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
+  await toolbar.getByRole('button', { name: 'Move to trash' }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Trash', exact: true }).click();
+  await expect(page.locator('.file-row')).toHaveCount(3);
+  await page.getByRole('checkbox', { name: 'Select all visible files' }).check();
+  await toolbar.getByRole('button', { name: 'Delete forever' }).click();
+  await expect(page.getByRole('dialog', { name: 'Delete 3 files for good?' })).toContainText('Q3 marketing budget');
+  await page.getByRole('button', { name: 'Keep files' }).click();
+  await expect(page.locator('.file-row')).toHaveCount(3);
+  await toolbar.getByRole('button', { name: 'Restore', exact: true }).click();
+  await expect(page.locator('.file-row')).toHaveCount(0);
+  await page.locator('.sidebar').getByRole('button', { name: 'My files', exact: false }).click();
+  await expect(page.locator('.file-row')).toHaveCount(6);
+
+  await page.evaluate(() => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File(['A drag-and-drop document.'], 'Dropped notes.txt', { type: 'text/plain' }));
+    window.dispatchEvent(new DragEvent('dragenter', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+    if (!document.querySelector('.workspace-drop-overlay')) { /* React paints on the next turn. */ }
+    window.dispatchEvent(new DragEvent('drop', { dataTransfer: transfer, bubbles: true, cancelable: true }));
+  });
+  await expect(page.locator('.file-name').filter({ hasText: 'Dropped notes' })).toBeVisible();
+  await expect(page.locator('.workspace-drop-overlay')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.file-row')).toHaveCount(7);
+  await page.getByRole('button', { name: 'Grid view' }).click();
+  await page.getByRole('checkbox', { name: 'Select Dropped notes', exact: true }).check();
+  await expect(toolbar).toContainText('1 selected');
+  await page.screenshot({ path: '/tmp/folio-workspace-upgrade-desktop.png' });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: 'Open command menu' }).filter({ visible: true }).click();
+  await search.fill('missing file that does not exist');
+  await expect(page.getByText('No matches yet', { exact: true })).toBeVisible();
+  await search.fill('Command draft');
+  await expect(page.getByRole('option')).toHaveCount(1);
+  await search.press('Tab');
+  await expect(page.getByRole('button', { name: 'Close command menu' })).toBeFocused();
+  await page.keyboard.press('Tab');
+  await expect(search).toBeFocused();
+  await page.screenshot({ path: '/tmp/folio-command-menu-mobile.png' });
+  await search.press('Escape');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await toolbar.getByRole('button', { name: 'Clear file selection' }).click();
+  for (const name of ['Command draft', 'Dropped notes']) await page.getByRole('checkbox', { name: `Select ${name}`, exact: true }).check();
+  await toolbar.getByRole('button', { name: 'Move to trash' }).click();
+  await page.locator('.sidebar').getByRole('button', { name: 'Trash', exact: true }).click();
+  await page.getByRole('checkbox', { name: 'Select all visible files' }).check();
+  await toolbar.getByRole('button', { name: 'Delete forever' }).click();
+  await page.getByRole('button', { name: 'Delete selected files' }).click();
+  await expect(page.locator('.file-row')).toHaveCount(0);
+  await page.reload();
+  await expect(page.locator('.file-row')).toHaveCount(5);
+  expect(errors).toEqual([]);
+  console.log('PASS: command search/actions/keyboard/focus, native Office ZIP, bulk star/trash/undo/restore, deletion confirmation, filtered selection isolation, file drop, reload and mobile layout.');
+} finally { await browser.close(); }

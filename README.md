@@ -24,6 +24,7 @@ Browser storage is specific to each site address. Documents saved at localhost o
 - Rich text, fonts, headings, alignment, line spacing, indentation, subscript/superscript, case conversion, and format painter.
 - Tables with row/column controls, merged cells, header rows, and cell shading; images with width and alignment controls.
 - Text comments with resolve/reopen, browser spellcheck, find/replace, and document outline.
+- Distraction-free focus mode (`Ctrl/Cmd + Shift + F`), live document/selection statistics, and a searchable outline with keyboard navigation.
 - Page breaks, A4/Letter/Legal paper, orientation, margins, headers, footers, and page numbers.
 - DOCX export with native comments and page settings; HTML, TXT, and print-to-PDF.
 
@@ -33,6 +34,8 @@ Browser storage is specific to each site address. Documents saved at localhost o
 - Cell/range text formatting, colors, alignment, number/currency/percentage/date formats, and resizable columns.
 - Whole-row sorting, text filtering, fill down/right with relative references, find/replace, frozen top row, gridline/formula views, and zoom.
 - Arithmetic, comparisons, logical conditions, text/date functions, conditional sums/counts, and error handling. Formulas run through a restricted parser without JavaScript execution.
+- 39 supported functions, including VLOOKUP, HLOOKUP, XLOOKUP, INDEX, MATCH, SUMIFS, and COUNTIFS; keyboard formula completion, argument hints, and a searchable function library.
+- Live range statistics with matching number formats and explanations for formula errors.
 - Workbook undo/redo, range selection, keyboard navigation, and tabular paste.
 - XLSX export preserves all worksheets, supported formatting, widths, formulas, and frozen rows. CSV exports the active worksheet.
 
@@ -40,6 +43,7 @@ Browser storage is specific to each site address. Documents saved at localhost o
 
 - Title, content, split, and blank layouts; fonts, text sizes, themes, and colors.
 - Movable/resizable text boxes, pictures, and rectangle/ellipse/line shapes; object formatting, layering, rotation, duplication, and deletion.
+- Select multiple objects to move, duplicate, delete, align, or distribute them together; optional grid snapping with Alt to bypass.
 - Speaker notes, hidden slides, fade/push transitions, presentation mode, undo/redo, and keyboard shortcuts.
 - PPTX export with editable native text/shapes/images, notes, hidden slides, and transitions; print-to-PDF.
 
@@ -47,6 +51,9 @@ Browser storage is specific to each site address. Documents saved at localhost o
 
 - Import DOCX, XLSX/XLS, CSV, PPTX, TXT, HTML, and basic Markdown.
 - Search, favorites, rename, duplicate, trash/restore, list/grid views, and editable templates.
+- `Ctrl/Cmd + K` command menu to find files, create documents, open version history, and run workspace actions.
+- Bulk favorites, trash with Undo, restore, permanent deletion with confirmation, and native Office files bundled in a ZIP download.
+- Drag files onto the workspace to import them.
 - Save up to 10 named versions per file; restoring a version first saves the current draft.
 - Download a complete `.folio.json` workspace backup including versions; restore files as copies.
 - IndexedDB storage with automatic migration of earlier files, accurate save indicators, local profile, and responsive layouts.
@@ -65,16 +72,24 @@ With the Vite dev server running:
 
 ```sh
 node tests/verify-workspace.mjs
+node tests/workspace-productivity.mjs
+node tests/command-palette-isolation.mjs
+node tests/workspace-trash-undo.mjs
 node tests/workspace-history.mjs
 node tests/workspace-storage.mjs
 node tests/workspace-async.mjs
 node tests/workspace-backup-fidelity.mjs
 node tests/document-tools.mjs
+node tests/document-writing.mjs
 node tests/doc-advanced-exports.mjs
 node tests/spreadsheet-editor.mjs
+node tests/spreadsheet-assistance.mjs
+node tests/workbook-formula-export.mjs
 node --test tests/spreadsheet-formulas.test.mjs
 node tests/verify-slides.mjs
+node tests/slides-arrangement.mjs
 node tests/office-roundtrip.mjs
+node tests/bulk-export.mjs
 ```
 
 `BASE_URL=https://folio-office.vercel.app node tests/verify-workspace.mjs` checks the deployed UI using a fresh browser profile. Roundtrip tests inspect native Office ZIP/XML files; they do not replace rendering checks in desktop Microsoft Office.

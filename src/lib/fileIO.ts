@@ -18,7 +18,12 @@ function baseName(name: string) {
 }
 
 function safeFilename(name: string, extension: string) {
-  return `${name.replace(/\.(docx|xlsx|pptx|csv|txt|html|htm|md)$/i, '').replace(/[<>:"/\\|?*\x00-\x1f]/g, '-').trim() || 'Untitled'}.${extension}`;
+  let stem = name.normalize('NFC').replace(/\.(docx|xlsx|xls|pptx|csv|txt|html|htm|md)$/i, '').replace(/[<>:"/\\|?*\x00-\x1f\x7f-\x9f]/g, '-').trim().replace(/^[. ]+|[. ]+$/g, '') || 'Untitled';
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(stem)) stem = `_${stem}`;
+  // Leave room for the extension and collision suffix on common filesystems.
+  const encoder = new TextEncoder();
+  while (encoder.encode(stem).length > 180) stem = Array.from(stem).slice(0, -1).join('');
+  return `${stem}.${extension}`;
 }
 
 export function downloadBlob(blob: Blob, filename: string): void {
@@ -438,18 +443,31 @@ export async function importOfficeFile(file: File): Promise<ImportedOfficeFile> 
   }
 }
 
-export async function downloadOfficeFile(file: OfficeFile): Promise<void> {
+/** Produce a native Office file without a browser download or editor dependency. */
+export async function createOfficeFileBlob(file: OfficeFile): Promise<{ blob: Blob; filename: string }> {
   if (file.kind === 'document') {
-    const { exportDocument } = await import('../editors/documentExport');
-    await exportDocument(typeof file.content === 'string' ? file.content : '<p></p>', file.name, 'docx', { ...file.pageSetup, comments: file.comments });
+    if (typeof file.content !== 'string') throw new Error('This document has no valid text content.');
+    const { buildDocumentBlob } = await import('../editors/documentExport');
+    return { blob: await buildDocumentBlob(file.content, file.name, 'docx', { ...file.pageSetup, comments: file.comments }), filename: safeFilename(file.name, 'docx') };
   } else if (file.kind === 'spreadsheet') {
-    const { exportWorkbook } = await import('./workbookIO');
-    await exportWorkbook(file.content as SheetContent, file.name, 'xlsx');
+    const isRecord = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
+    const content = file.content;
+    const validContent = isRecord(content) && (Array.isArray(content.sheets) && content.sheets.length
+      ? content.sheets.every(sheet => isRecord(sheet) && isRecord(sheet.cells))
+      : isRecord(content.cells));
+    if (!validContent) throw new Error('This spreadsheet has no valid worksheet data.');
+    const { createWorkbookBlob } = await import('./workbookIO');
+    return { blob: await createWorkbookBlob(content as unknown as SheetContent, 'xlsx'), filename: safeFilename(file.name, 'xlsx') };
   }
   else if (file.kind === 'presentation') {
     if (!Array.isArray(file.content) || !file.content.length) throw new Error('Add a slide before exporting this presentation.');
-    const { exportPresentationPptx } = await import('../editors/PresentationEditor');
-    await exportPresentationPptx(file.content as SlideData[], safeFilename(file.name, 'pptx').replace(/\.pptx$/i, ''));
+    const { buildPresentationBlob } = await import('../editors/slidesPptx');
+    return { blob: await buildPresentationBlob(file.content as SlideData[], file.name), filename: safeFilename(file.name, 'pptx') };
   }
   else throw new Error('This file type cannot be exported.');
+}
+
+export async function downloadOfficeFile(file: OfficeFile): Promise<void> {
+  const { blob, filename } = await createOfficeFileBlob(file);
+  downloadBlob(blob, filename);
 }

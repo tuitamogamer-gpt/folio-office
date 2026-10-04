@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { calculateCells, shiftFormulaReferences } from '../src/editors/spreadsheetFormula.ts';
+import { calculateCells, FORMULA_CATALOG, shiftFormulaReferences } from '../src/editors/spreadsheetFormula.ts';
 import { normalizeWorkbook, packWorkbook, renameSheetReferences } from '../src/lib/spreadsheetModel.ts';
 
 const evaluate = (formula, cells = {}) => calculateCells({ ...cells, XFD1048576: formula })('XFD1048576');
@@ -145,4 +145,104 @@ test('sheet rename and invalid-name migration rewrite references without rewriti
   assert.equal(workbook.sheets[1].cells.A2, "='AB'!A1+'AB (2)'!A1");
   assert.equal(workbook.sheets[1].cells.A3, '=\"A/B!A1\"');
   assert.equal(calculateCells(workbook.sheets[1].cells, { sheets: workbook.sheets, currentSheetId: 'b' })('A2'), 7);
+});
+
+test('VLOOKUP and HLOOKUP return exact, wildcard and approximate matches with typed keys', () => {
+  const cells = {
+    A1: '10', B1: 'Starter', C1: '4', A2: '20', B2: 'Team', C2: '8', A3: '20', B3: 'Team plus', C3: '12', A4: '30', B4: 'Business', C4: '16',
+    E1: 'Code', F1: 'apple', G1: 'apricot', H1: 'a*', E2: 'Price', F2: '2', G2: '3', H2: '4',
+    J1: "'10", K1: 'Text identifier', J2: '10', K2: 'Numeric identifier',
+  };
+  for (const [formula, expected] of [
+    ['=VLOOKUP(20,A1:C4,2,FALSE)', 'Team'], ['=VLOOKUP(20,A1:C4,2,TRUE)', 'Team plus'],
+    ['=VLOOKUP(25,A1:C4,3)', 12], ['=VLOOKUP(5,A1:C4,2)', '#N/A'], ['=VLOOKUP(31,A1:C4,2)', 'Business'],
+    ['=VLOOKUP(25,A1:C4,2,FALSE)', '#N/A'], ['=VLOOKUP(10,A1:C4,0,FALSE)', '#VALUE!'], ['=VLOOKUP(10,A1:C4,4,FALSE)', '#REF!'],
+    ['=VLOOKUP(10,J1:K2,2,FALSE)', 'Numeric identifier'], ['=VLOOKUP("10",J1:K2,2,FALSE)', 'Text identifier'],
+    ['=HLOOKUP("APPLE",F1:H2,2,FALSE)', 2], ['=HLOOKUP("ap*",F1:H2,2,FALSE)', 2], ['=HLOOKUP("a~*",F1:H2,2,FALSE)', 4],
+    ['=HLOOKUP("missing",F1:H2,2,FALSE)', '#N/A'], ['=HLOOKUP("apple",F1:H2,3,FALSE)', '#REF!'],
+  ]) assert.equal(evaluate(formula, cells), expected, formula);
+  assert.equal(evaluate('=HLOOKUP(15,A1:C2,2)', { A1: '10', B1: '20', C1: '30', A2: 'low', B2: 'medium', C2: 'high' }), 'low');
+  assert.equal(evaluate('=VLOOKUP("yes",A1:B2,2,FALSE)', { A1: 'yes', A2: 'no', B2: '=1/0' }), 0, 'an empty selected result is zero; unrelated return-cell errors do not leak');
+  assert.equal(evaluate('=VLOOKUP("yes",A1:B2,2,FALSE)', { A1: 'yes', B1: '=1/0', A2: 'no' }), '#DIV/0!');
+});
+
+test('INDEX and MATCH compose for exact keys, positions, row/column selection and bounds', () => {
+  const cells = { A1: 'apple', A2: 'pear', A3: 'plum', B1: '3', B2: '6', B3: '9', C1: '2', C2: '4', C3: '8', E1: '30', E2: '20', E3: '10' };
+  for (const [formula, expected] of [
+    ['=MATCH("PEAR",A1:A3,0)', 2], ['=MATCH("p*",A1:A3,0)', 2], ['=MATCH("missing",A1:A3,0)', '#N/A'],
+    ['=MATCH(7,B1:B3)', 2], ['=MATCH(2,B1:B3,1)', '#N/A'], ['=MATCH(25,E1:E3,-1)', 1], ['=MATCH(5,E1:E3,-1)', 3],
+    ['=MATCH(40,E1:E3,-1)', '#N/A'], ['=MATCH(6,B1:C3,0)', '#N/A'],
+    ['=INDEX(B1:C3,MATCH("pear",A1:A3,0),2)', 4], ['=INDEX(B1:B3,2)', 6], ['=INDEX(A1:C1,2)', 3],
+    ['=SUM(INDEX(B1:C3,0,2))', 14], ['=SUM(INDEX(B1:C3,2,0))', 10], ['=SUM(INDEX(B1:C3,2))', 10],
+    ['=SUM(INDEX(B1:C3,0,0))', 32], ['=INDEX(B1:B3,2,0)', 6], ['=INDEX(B1:C3,4,1)', '#REF!'],
+    ['=INDEX(B1:C3,1,3)', '#REF!'], ['=INDEX(B1:C3,-1,1)', '#VALUE!'],
+  ]) assert.equal(evaluate(formula, cells), expected, formula);
+  assert.equal(evaluate('=MATCH("a~*",A1:A2,0)', { A1: 'apple', A2: 'a*' }), 2);
+  assert.equal(evaluate('=MATCH(20,A1:A4)', { A1: '10', A2: '20', A3: '20', A4: '30' }), 3);
+});
+
+test('XLOOKUP defaults to exact matching, preserves type and supports first/last search plus lazy fallback', () => {
+  const cells = { A1: 'one', A2: 'two', A3: 'one', B1: '10', B2: '20', B3: '30', C1: "'10", C2: '10', D1: 'text', D2: 'number' };
+  for (const [formula, expected] of [
+    ['=XLOOKUP("ONE",A1:A3,B1:B3)', 10], ['=XLOOKUP("one",A1:A3,B1:B3,,0,-1)', 30],
+    ['=XLOOKUP("none",A1:A3,B1:B3)', '#N/A'], ['=XLOOKUP("none",A1:A3,B1:B3,,0)', '#N/A'],
+    ['=XLOOKUP("none",A1:A3,B1:B3,"Not listed")', 'Not listed'], ['=XLOOKUP("one",A1:A3,B1:B3,1/0)', 10],
+    ['=XLOOKUP("none",A1:A3,B1:B3,1/0)', '#DIV/0!'], ['=XLOOKUP("none",A1:A3,B1:B3,"")', ''],
+    ['=XLOOKUP("one",A1:A3,B1:B3,0,,)', 10], ['=XLOOKUP(10,C1:C2,D1:D2)', 'number'], ['=XLOOKUP("10",C1:C2,D1:D2)', 'text'],
+    ['=XLOOKUP("one",A1:A3,B1:B2)', '#VALUE!'], ['=XLOOKUP("one",A1:B3,C1:C3)', '#VALUE!'],
+    ['=XLOOKUP("one",A1:A3,B1:B3,,9)', '#VALUE!'], ['=XLOOKUP("one",A1:A3,B1:B3,,0,9)', '#VALUE!'],
+    ['=_xlfn.XLOOKUP("two",A1:A3,B1:B3)', 20],
+  ]) assert.equal(evaluate(formula, cells), expected, formula);
+  assert.equal(evaluate('=XLOOKUP("yes",A1:A2,B1:B2,"missing")', { A1: 'yes', B1: '#N/A', A2: 'no', B2: '2' }), '#N/A', 'if_not_found does not hide errors from a matched result');
+  assert.equal(evaluate('=XLOOKUP("yes",A1:A2,B1:B2,1/0)', { A1: 'yes', A2: 'no', B2: '=1/0' }), 0);
+});
+
+test('XLOOKUP supports approximate unsorted scans, horizontal results, wildcards and sorted binary searches', () => {
+  const cells = { A1: '30', A2: '10', A3: '20', B1: 'large', B2: 'small', B3: 'medium', C1: '10', C2: '20', C3: '30', D1: 'small', D2: 'medium', D3: 'large', E1: '30', E2: '20', E3: '10', F1: 'large', F2: 'medium', F3: 'small' };
+  for (const [formula, expected] of [
+    ['=XLOOKUP(25,A1:A3,B1:B3,,-1)', 'medium'], ['=XLOOKUP(25,A1:A3,B1:B3,,1)', 'large'],
+    ['=XLOOKUP(5,A1:A3,B1:B3,"none",-1)', 'none'], ['=XLOOKUP(35,A1:A3,B1:B3,"none",1)', 'none'],
+    ['=XLOOKUP(20,C1:C3,D1:D3,,0,2)', 'medium'], ['=XLOOKUP(25,C1:C3,D1:D3,,-1,2)', 'medium'], ['=XLOOKUP(25,C1:C3,D1:D3,,1,2)', 'large'],
+    ['=XLOOKUP(20,E1:E3,F1:F3,,0,-2)', 'medium'], ['=XLOOKUP(25,E1:E3,F1:F3,,-1,-2)', 'medium'], ['=XLOOKUP(25,E1:E3,F1:F3,,1,-2)', 'large'],
+    ['=XLOOKUP(1,C1:C3,D1:D3,"none",-1,2)', 'none'], ['=XLOOKUP(99,E1:E3,F1:F3,"none",1,-2)', 'none'],
+  ]) assert.equal(evaluate(formula, cells), expected, formula);
+  const horizontal = { A1: 'Apple', B1: 'Apricot', C1: 'a*', A2: '2', B2: '3', C2: '4', A3: '20', B3: '30', C3: '40' };
+  for (const [formula, expected] of [
+    ['=XLOOKUP("Apricot",A1:C1,A2:C2)', 3], ['=XLOOKUP("a*",A1:C1,A2:C2)', 4], ['=XLOOKUP("ap*",A1:C1,A2:C2,,2)', 2],
+    ['=XLOOKUP("ap*",A1:C1,A2:C2,,2,-1)', 3], ['=XLOOKUP("a~*",A1:C1,A2:C2,,2)', 4],
+    ['=SUM(XLOOKUP("Apricot",A1:C1,A2:C3))', 33], ['=SUM(XLOOKUP("Apple",A1:A3,B1:C3))', 0],
+  ]) assert.equal(evaluate(formula, horizontal), expected, formula);
+});
+
+test('SUMIFS and COUNTIFS combine criteria, validate full range shape and only propagate selected sum errors', () => {
+  const cells = { A1: 'North', A2: 'South', A3: 'North', A4: 'North', A5: 'North', B1: 'Paid', B2: 'Paid', B3: 'Open', B4: 'Paid', B5: 'Open', C1: '10', C2: '20', C3: '30', C4: '40', C5: '=1/0' };
+  for (const [formula, expected] of [
+    ['=SUMIFS(C1:C5,A1:A5,"north",B1:B5,"Paid")', 50], ['=COUNTIFS(A1:A5,"N*",B1:B5,"Paid")', 2],
+    ['=COUNTIFS(A1:A5,"North",C1:C5,">=20")', 2], ['=SUMIFS(C1:C5,A1:A5,"South")', 20],
+    ['=SUMIFS(C1:C5,A1:A5,"Missing")', 0], ['=SUMIFS(C1:C5,A1:A5,"North",B1:B5,"Open")', '#DIV/0!'],
+    ['=COUNTIFS(A1:A5,"Missing")', 0], ['=COUNTIFS(A1:A5,"North",B1:B4,"Paid")', '#VALUE!'],
+    ['=SUMIFS(C1:C5,A1:A4,"North")', '#VALUE!'], ['=COUNTIFS(A1:A4,"North",A1:B2,"Paid")', '#VALUE!'],
+    ['=COUNTIFS(A1:A5,"North",B1:B5)', '#VALUE!'], ['=SUMIFS(C1:C5,A1:A5)', '#VALUE!'],
+    ['=COUNTIFS(1,1)', '#VALUE!'], ['=SUMIFS(C1,C1,">0")', 10], ['=COUNTIFS(A6:A8,"")', 3],
+  ]) assert.equal(evaluate(formula, cells), expected, formula);
+  assert.equal(evaluate('=COUNTIFS(A1:A3,"a~*",B1:B3,TRUE)', { A1: 'a*', A2: 'apple', A3: 'a*', B1: 'TRUE', B2: 'TRUE', B3: 'FALSE' }), 1);
+});
+
+test('lookup and multiple-criteria functions work across quoted sheets and remain fill-compatible', () => {
+  const sheets = [
+    { id: 'sales', name: "Sales '26", cells: { A1: 'P01', A2: 'P02', A3: 'P03', B1: 'North', B2: 'South', B3: 'North', C1: '10', C2: '20', C3: '30' } },
+    { id: 'report', name: 'Report', cells: { A1: 'P02', A2: "=XLOOKUP(A1,'Sales ''26'!$A$1:$A$3,'Sales ''26'!$C$1:$C$3)", A3: "=SUMIFS('Sales ''26'!C1:C3,'Sales ''26'!B1:B3,\"North\")", A4: "=INDEX('Sales ''26'!C1:C3,MATCH(A1,'Sales ''26'!A1:A3,0))" } },
+  ];
+  const f = calculateCells(sheets[1].cells, { sheets, currentSheetId: 'report' });
+  assert.equal(f('A2'), 20); assert.equal(f('A3'), 40); assert.equal(f('A4'), 20);
+  assert.equal(shiftFormulaReferences(sheets[1].cells.A2, 1, 0), "=XLOOKUP(A2,'Sales ''26'!$A$1:$A$3,'Sales ''26'!$C$1:$C$3)");
+});
+
+test('function help offers unique supported examples instead of suggesting unknown formula names', () => {
+  assert.equal(new Set(FORMULA_CATALOG.map(entry => entry.name)).size, FORMULA_CATALOG.length);
+  for (const entry of FORMULA_CATALOG) {
+    assert.ok(entry.description && entry.category && entry.signature.startsWith(`${entry.name}(`), entry.name);
+    assert.notEqual(evaluate(entry.example), '#NAME?', `${entry.name} advertises an unsupported example`);
+  }
+  for (const name of ['VLOOKUP', 'HLOOKUP', 'XLOOKUP', 'INDEX', 'MATCH', 'COUNTIFS', 'SUMIFS']) assert.ok(FORMULA_CATALOG.some(entry => entry.name === name));
 });

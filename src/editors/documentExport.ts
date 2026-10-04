@@ -11,7 +11,7 @@ import type { DocumentComment, DocumentPageSetup } from '../types';
 
 type Block = Paragraph | Table;
 type ListContext = { reference: string; level: number };
-type ExportOptions = Partial<DocumentPageSetup> & { comments?: DocumentComment[] };
+export type ExportOptions = Partial<DocumentPageSetup> & { comments?: DocumentComment[] };
 type InlineContext = {
   maxImageWidth: number;
   commentStarts: Map<HTMLElement, number>;
@@ -206,17 +206,16 @@ function plainText(root: HTMLElement): string {
   return walk(root).replace(/\t\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-export async function exportDocument(html: string, name: string, format: 'docx' | 'html' | 'txt', options: ExportOptions = {}): Promise<void> {
+/** Build the document without opening a browser download. */
+export async function buildDocumentBlob(html: string, name: string, format: 'docx' | 'html' | 'txt', options: ExportOptions = {}): Promise<Blob> {
   const safeHtml = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
   const root = document.createElement('div');
   root.innerHTML = safeHtml;
   const paper = PAPER_SIZES[options.size || 'a4'] || PAPER_SIZES.a4;
   const margin = { normal: 1440, narrow: 720, wide: 2160 }[options.margin || 'normal'] || 1440;
   const comments = Array.from(new Map((options.comments || []).map(comment => [comment.id, comment])).values());
-  const filename = (name.trim() || 'Untitled document').replace(/[\\/:*?"<>|]/g, '-').replace(/\.(docx|html?|txt)$/i, '');
   if (format === 'txt') {
-    download(new Blob([plainText(root)], { type: 'text/plain;charset=utf-8' }), `${filename}.txt`);
-    return;
+    return new Blob([plainText(root)], { type: 'text/plain;charset=utf-8' });
   }
   if (format === 'html') {
     const escape = (text: string) => {
@@ -229,8 +228,7 @@ export async function exportDocument(html: string, name: string, format: 'docx' 
     const footerText = options.footer || '';
     const pageFooter = `${cssText(footerText + (footerText && options.pageNumbers ? ' · ' : ''))}${options.pageNumbers ? ' "Page " counter(page)' : ''}`;
     const notes = comments.length ? `<aside class="document-comments"><h2>Comments</h2><ol>${comments.map(comment => `<li${comment.resolved ? ' data-resolved="true"' : ''}><p>${escape(comment.text)}${comment.resolved ? ' (Resolved)' : ''}</p>${comment.quote ? `<blockquote>${escape(comment.quote)}</blockquote>` : ''}</li>`).join('')}</ol></aside>` : '';
-    download(new Blob([`<!doctype html><html><head><meta charset="utf-8"><title>${escape(name || 'Untitled document')}</title><style>@page{size:${paper.css} ${options.landscape ? 'landscape' : 'portrait'};margin:${margin / 1440}in;@top-center{content:${cssText(options.header || '')};font:9pt Arial,sans-serif;color:#64748b}@bottom-center{content:${pageFooter};font:9pt Arial,sans-serif;color:#64748b}}body{font:11pt Arial,sans-serif;max-width:${pageWidth}px;margin:48px auto;line-height:1.65;padding:0 24px}h1{font:normal 30pt Georgia,serif;color:#243c2d}h2{font:normal 21pt Georgia,serif;color:#34573d}h3{font:normal 14pt Arial,sans-serif;color:#456b4a}table{border-collapse:collapse;width:100%}td,th{border:1px solid #cbd5e1;padding:8px}img{max-width:100%;height:auto}blockquote{border-left:3px solid #94a3b8;margin-left:0;padding-left:20px}[data-page-break]{break-after:page;page-break-after:always}.page-header,.page-footer{white-space:pre-line;text-align:center;color:#64748b;font-size:9pt;margin:24px 0}.document-comments{border-top:1px solid #cbd5e1;margin-top:36px}[data-comment-id]{background:#fef3c7}@media print{body{max-width:none;margin:0;padding:0}.page-header,.page-footer{display:none}}</style></head><body>${options.header ? `<header class="page-header">${escape(options.header)}</header>` : ''}<main>${safeHtml}</main>${footerText ? `<footer class="page-footer">${escape(footerText)}</footer>` : ''}${notes}</body></html>`], { type: 'text/html;charset=utf-8' }), `${filename}.html`);
-    return;
+    return new Blob([`<!doctype html><html><head><meta charset="utf-8"><title>${escape(name || 'Untitled document')}</title><style>@page{size:${paper.css} ${options.landscape ? 'landscape' : 'portrait'};margin:${margin / 1440}in;@top-center{content:${cssText(options.header || '')};font:9pt Arial,sans-serif;color:#64748b}@bottom-center{content:${pageFooter};font:9pt Arial,sans-serif;color:#64748b}}body{font:11pt Arial,sans-serif;max-width:${pageWidth}px;margin:48px auto;line-height:1.65;padding:0 24px}h1{font:normal 30pt Georgia,serif;color:#243c2d}h2{font:normal 21pt Georgia,serif;color:#34573d}h3{font:normal 14pt Arial,sans-serif;color:#456b4a}table{border-collapse:collapse;width:100%}td,th{border:1px solid #cbd5e1;padding:8px}img{max-width:100%;height:auto}blockquote{border-left:3px solid #94a3b8;margin-left:0;padding-left:20px}[data-page-break]{break-after:page;page-break-after:always}.page-header,.page-footer{white-space:pre-line;text-align:center;color:#64748b;font-size:9pt;margin:24px 0}.document-comments{border-top:1px solid #cbd5e1;margin-top:36px}[data-comment-id]{background:#fef3c7}@media print{body{max-width:none;margin:0;padding:0}.page-header,.page-footer{display:none}}</style></head><body>${options.header ? `<header class="page-header">${escape(options.header)}</header>` : ''}<main>${safeHtml}</main>${footerText ? `<footer class="page-footer">${escape(footerText)}</footer>` : ''}${notes}</body></html>`], { type: 'text/html;charset=utf-8' });
   }
 
   const numbering: INumberingOptions['config'][number][] = [];
@@ -398,5 +396,10 @@ export async function exportDocument(html: string, name: string, format: 'docx' 
     doc.Document.Relationships.addRelationship('FolioCommentState', 'http://schemas.microsoft.com/office/2011/relationships/commentsExtended', 'commentsExtended.xml');
     extraParts.push({ path: 'word/commentsExtended.xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w15:commentsEx xmlns:w15="http://schemas.microsoft.com/office/word/2012/wordml">${comments.map((comment, id) => `<w15:commentEx w15:paraId="${commentIdToParaId(id)}" w15:done="${comment.resolved ? '1' : '0'}"/>`).join('')}</w15:commentsEx>` });
   }
-  download(await Packer.toBlob(doc, false, extraParts), `${filename}.docx`);
+  return Packer.toBlob(doc, false, extraParts);
+}
+
+export async function exportDocument(html: string, name: string, format: 'docx' | 'html' | 'txt', options: ExportOptions = {}): Promise<void> {
+  const filename = (name.trim() || 'Untitled document').replace(/[\\/:*?"<>|]/g, '-').replace(/\.(docx|html?|txt)$/i, '') || 'Untitled document';
+  download(await buildDocumentBlob(html, name, format, options), `${filename}.${format}`);
 }

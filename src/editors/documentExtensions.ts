@@ -1,5 +1,57 @@
 import { Extension, Mark, Node, mergeAttributes } from '@tiptap/core';
 import Image from '@tiptap/extension-image';
+import type { Node as ProseMirrorNode } from '@tiptap/pm/model';
+
+const wordSegments = new Intl.Segmenter(undefined, { granularity: 'word' });
+const characterSegments = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+export interface WritingStatistics { words: number; characters: number; charactersWithoutSpaces: number; paragraphs: number; readingMinutes: number; }
+export interface OutlineHeading { text: string; level: number; pos: number; }
+
+function statisticsForParagraphs(paragraphs: string[]): WritingStatistics {
+  const text = paragraphs.join('\n');
+  let words = 0;
+  let characters = 0;
+  let charactersWithoutSpaces = 0;
+  for (const segment of wordSegments.segment(text)) if (segment.isWordLike) words++;
+  for (const segment of characterSegments.segment(text)) {
+    if (!/[\r\n]/.test(segment.segment)) characters++;
+    if (!/^\s+$/u.test(segment.segment)) charactersWithoutSpaces++;
+  }
+  return {
+    words,
+    characters,
+    charactersWithoutSpaces,
+    paragraphs: paragraphs.filter(paragraph => paragraph.trim()).length,
+    readingMinutes: words ? words < 200 ? 0.5 : Math.ceil(words / 200) : 0,
+  };
+}
+
+const writingCache = new WeakMap<ProseMirrorNode, { headings: OutlineHeading[]; statistics: WritingStatistics }>();
+
+export function documentWritingState(doc: ProseMirrorNode, from: number, to: number) {
+  let documentState = writingCache.get(doc);
+  if (!documentState) {
+    const headings: OutlineHeading[] = [];
+    const paragraphs: string[] = [];
+    doc.descendants((node, pos) => {
+      if (node.type.name === 'heading') headings.push({ text: node.textContent, level: Number(node.attrs.level) || 1, pos });
+      if (!node.isTextblock) return;
+      paragraphs.push(node.textBetween(0, node.content.size, '', '\n'));
+      return false;
+    });
+    documentState = { headings, statistics: statisticsForParagraphs(paragraphs) };
+    writingCache.set(doc, documentState);
+  }
+  const selectedParagraphs: string[] = [];
+  if (from < to) doc.nodesBetween(from, to, (node, pos) => {
+    if (!node.isTextblock) return;
+    const start = pos + 1;
+    if (from < start + node.content.size && to > start) selectedParagraphs.push(node.textBetween(Math.max(0, from - start), Math.min(node.content.size, to - start), '', '\n'));
+    return false;
+  });
+  return { ...documentState, selectionStatistics: from < to ? statisticsForParagraphs(selectedParagraphs) : null };
+}
 
 export const DocumentAttributes = Extension.create({
   name: 'documentAttributes',

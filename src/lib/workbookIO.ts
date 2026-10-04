@@ -8,6 +8,35 @@ const tags = (node: Document | Element, name: string) => Array.from(node.getElem
 const xml = (value: string) => new DOMParser().parseFromString(value, 'application/xml');
 const color = (value?: string | null) => value && /^(?:[a-f\d]{2})?[a-f\d]{6}$/i.test(value) ? `#${value.slice(-6)}` : undefined;
 
+// These supported functions postdate the original OOXML function set. Excel
+// expects the future-function prefix on disk, while users can type normal names.
+const FUTURE_FUNCTIONS = new Set(['XLOOKUP', 'CONCAT']);
+function officeFormula(formula: string): string {
+  let output = '';
+  for (let position = 0; position < formula.length;) {
+    const start = position;
+    const quote = formula[position];
+    if (quote === '"' || quote === "'") {
+      position++;
+      while (position < formula.length) {
+        if (formula[position++] === quote) {
+          if (formula[position] === quote) position++;
+          else break;
+        }
+      }
+      output += formula.slice(start, position);
+      continue;
+    }
+    const name = formula.slice(position).match(/^[\p{L}_$][\p{L}\p{N}_.$]*/u)?.[0];
+    if (name) {
+      position += name.length;
+      // Dotted names already include their namespace; do not qualify them again.
+      output += FUTURE_FUNCTIONS.has(name.toUpperCase()) && /^\s*\(/.test(formula.slice(position)) ? `_xlfn.${name}` : name;
+    } else output += formula[position++];
+  }
+  return output;
+}
+
 function numberFormat(style: CellStyle): string {
   const places = Math.max(0, Math.min(10, style.decimals ?? (style.numberFormat === 'percentage' ? 0 : 2)));
   const decimal = places ? `.${'0'.repeat(places)}` : '';
@@ -111,7 +140,7 @@ export async function importWorkbook(file: File): Promise<{ content: SheetConten
   const buffer = extension === 'csv' ? null : await file.arrayBuffer();
   const workbook = extension === 'csv'
     ? XLSX.read(await file.text(), { type: 'string', raw: true, cellFormula: true })
-    : XLSX.read(buffer, { type: 'array', cellFormula: true, cellDates: false, sheetStubs: true, cellStyles: true, cellNF: true });
+    : XLSX.read(buffer, { type: 'array', cellFormula: true, cellDates: false, sheetStubs: true, cellStyles: true, cellNF: true, xlfn: true });
   if (!workbook.SheetNames.length) throw new Error('This workbook does not contain a worksheet.');
   if (workbook.SheetNames.length > 100) throw new Error('Please import a workbook with 100 worksheets or fewer.');
   const metadata = extension === 'xlsx' && buffer ? await xlsxMetadata(buffer) : null;
@@ -173,7 +202,8 @@ export async function createWorkbookBlob(content: SheetContent, format: 'xlsx' |
       if (value.startsWith('=') && value.length > 1) {
         const computed = evaluate(address);
         const errors: Record<string, number> = { '#NULL!': 0, '#DIV/0!': 7, '#VALUE!': 15, '#REF!': 23, '#NAME?': 29, '#NUM!': 36, '#N/A': 42 };
-        cell = typeof computed === 'number' ? { t: 'n', f: value.slice(1), v: computed } : computed in errors ? { t: 'e', f: value.slice(1), v: errors[computed], w: computed } : ['TRUE', 'FALSE'].includes(computed) ? { t: 'b', f: value.slice(1), v: computed === 'TRUE' } : { t: 's', f: value.slice(1), v: computed };
+        cell = typeof computed === 'number' ? { t: 'n', v: computed } : computed in errors ? { t: 'e', v: errors[computed], w: computed } : ['TRUE', 'FALSE'].includes(computed) ? { t: 'b', v: computed === 'TRUE' } : { t: 's', v: computed };
+        cell.f = officeFormula(value.slice(1));
       } else if (/^(true|false)$/i.test(value)) cell = { t: 'b', v: value.toLowerCase() === 'true' };
       else if (/^[+-]?(?:0|[1-9]\d*)(?:\.\d*)?(?:e[+-]?\d+)?$/i.test(value) && Number.isFinite(Number(value)) && value.replace(/\D/g, '').length <= 15) cell = { t: 'n', v: Number(value) };
       else cell = { t: 's', v: value };
