@@ -13,7 +13,7 @@ Open http://localhost:5173. `npm run build` produces the production app in `dist
 
 ## Deploy to Vercel
 
-The live app is https://folio-office.vercel.app. In GitHub it lives in `BoroGPT/codex` under `folio-office/`; use `folio-office` as the Vercel Root Directory when importing that repository. For a standalone checkout, deploy from the application root. The included `vercel.json` configures the Vite build and `dist/` output. No environment variables or backend services are required.
+The live app is https://folio-office.vercel.app. Source code lives in `tuitamogamer-gpt/folio-office` as a standalone repository; deploy from its root and leave the Vercel Root Directory unset. The included `vercel.json` configures the Vite build and `dist/` output. No environment variables or backend services are required.
 
 Browser storage is specific to each site address. Documents saved at localhost or a preview URL will not appear automatically on the production site; export and import them to move them between addresses.
 
